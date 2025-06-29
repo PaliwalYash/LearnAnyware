@@ -72,6 +72,27 @@ const LearningManagementSystem = () => {
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
   const [chatLoading, setChatLoading] = useState(false);
+  const [emailStatus, setEmailStatus] = useState(null);
+  const [resendingEmail, setResendingEmail] = useState(false);
+
+  // Add these state variables in the LearningManagementSystem component
+  const [assignments, setAssignments] = useState([]);
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState([]);
+  const [assignmentForm, setAssignmentForm] = useState({
+    title: "",
+    description: "",
+    startDate: new Date().toISOString().split("T")[0],
+    endDate: "",
+    assignmentFile: null,
+  });
+  const [submissionForm, setSubmissionForm] = useState({
+    submissionLink: "",
+    submissionFile: null,
+    message: "",
+  });
+  const [selectedAssignment, setSelectedAssignment] = useState(null);
+  const [assignmentFeedback, setAssignmentFeedback] = useState("");
+  const [editingAssignment, setEditingAssignment] = useState(null);
 
   // Form states
   const [authForm, setAuthForm] = useState({
@@ -85,6 +106,7 @@ const LearningManagementSystem = () => {
     title: "",
     description: "",
     duration_days: 30,
+    group_link: "",
   });
 
   const [sessionForm, setSessionForm] = useState({
@@ -141,6 +163,9 @@ const LearningManagementSystem = () => {
   const [editingCourse, setEditingCourse] = useState(null);
   const [projectFeedback, setProjectFeedback] = useState("");
   const [showCredentials, setShowCredentials] = useState(null);
+  const [groupLinkForm, setGroupLinkForm] = useState("");
+  const [courseGroupLink, setCourseGroupLink] = useState(null);
+  const [groupLinkLoading, setGroupLinkLoading] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -154,6 +179,7 @@ const LearningManagementSystem = () => {
   useEffect(() => {
     if (selectedCourse && selectedCourse !== "create") {
       fetchSessions(selectedCourse.id);
+      fetchAssignments(selectedCourse.id);
       if (user?.role === "teacher") {
         fetchCourseStudents(selectedCourse.id);
         fetchProjects(selectedCourse.id);
@@ -341,6 +367,210 @@ const LearningManagementSystem = () => {
     }
   };
 
+  // Add these functions after the existing API functions
+
+  const fetchAssignments = async (courseId) => {
+    try {
+      const data = await apiCall(`/courses/${courseId}/assignments`);
+      setAssignments(data);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+
+  const createAssignment = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const formData = new FormData();
+      Object.keys(assignmentForm).forEach((key) => {
+        if (assignmentForm[key] !== null) {
+          formData.append(key, assignmentForm[key]);
+        }
+      });
+
+      const response = await fetch(
+        `${API_BASE}/courses/${selectedCourse.id}/assignments`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+          body: formData,
+        }
+      );
+
+      const data = await response.json();
+      if (response.ok) {
+        showMessage("Assignment created successfully!", "success");
+        setAssignmentForm({
+          title: "",
+          description: "",
+          startDate: new Date().toISOString().split("T")[0],
+          endDate: "",
+          assignmentFile: null,
+        });
+        fetchAssignments(selectedCourse.id);
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  // Update the submitAssignment function
+  const submitAssignment = async (e, assignmentId) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const formData = new FormData();
+
+      // Only append non-empty values
+      if (submissionForm.submissionLink && submissionForm.submissionLink.trim()) {
+        formData.append('submissionLink', submissionForm.submissionLink.trim());
+      }
+
+      if (submissionForm.submissionFile) {
+        formData.append('submissionFile', submissionForm.submissionFile);
+      }
+
+      if (submissionForm.message && submissionForm.message.trim()) {
+        formData.append('message', submissionForm.message.trim());
+      }
+
+      const response = await fetch(
+        `${API_BASE}/assignments/${assignmentId}/submit`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+          body: formData,
+        }
+      );
+
+      const data = await response.json();
+      if (response.ok) {
+        showMessage(data.message, "success");
+        setSubmissionForm({
+          submissionLink: "",
+          submissionFile: null,
+          message: "",
+        });
+        fetchAssignments(selectedCourse.id);
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const startEditingAssignment = (assignment) => {
+    setEditingAssignment(assignment);
+    setAssignmentForm({
+      title: assignment.title,
+      description: assignment.description || "",
+      startDate: assignment.start_date,
+      endDate: assignment.end_date,
+      assignmentFile: null,
+    });
+  };
+  const updateAssignment = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const formData = new FormData();
+      Object.keys(assignmentForm).forEach((key) => {
+        if (assignmentForm[key] !== null) {
+          formData.append(key, assignmentForm[key]);
+        }
+      });
+
+      const response = await fetch(
+        `${API_BASE}/assignments/${editingAssignment.id}`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+          body: formData,
+        }
+      );
+
+      const data = await response.json();
+      if (response.ok) {
+        showMessage("Assignment updated successfully!", "success");
+        setEditingAssignment(null);
+        setAssignmentForm({
+          title: "",
+          description: "",
+          startDate: new Date().toISOString().split("T")[0],
+          endDate: "",
+          assignmentFile: null,
+        });
+        fetchAssignments(selectedCourse.id);
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const fetchAssignmentSubmissions = async (assignmentId) => {
+    try {
+      const data = await apiCall(`/assignments/${assignmentId}/submissions`);
+      setAssignmentSubmissions(data);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+
+  const verifyAssignmentSubmission = async (submissionId, status, feedback = "") => {
+    setLoading(true);
+    try {
+      await apiCall(`/assignment-submissions/${submissionId}/verify`, {
+        method: "PUT",
+        body: JSON.stringify({ status, feedback }),
+      });
+
+      showMessage(`Assignment ${status} successfully!`, "success");
+      fetchAssignmentSubmissions(selectedAssignment.id);
+      setAssignmentFeedback("");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+    setLoading(false);
+  };
+
+  const deleteAssignment = async (assignmentId) => {
+    if (!window.confirm("Are you sure you want to delete this assignment?")) return;
+
+    setLoading(true);
+    try {
+      await apiCall(`/assignments/${assignmentId}`, {
+        method: "DELETE",
+      });
+
+      showMessage("Assignment deleted successfully!", "success");
+      fetchAssignments(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+    setLoading(false);
+  };
+
   const handleAuth = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -359,8 +589,17 @@ const LearningManagementSystem = () => {
         showMessage("Login successful!", "success");
         fetchInitialData(data.user);
       } else {
-        showMessage("Registration successful! Please login.", "success");
+        const data = await apiCall("/register", {
+          method: "POST",
+          body: JSON.stringify(authForm),
+        });
+
+        showMessage(
+          "Registration successful! Please check your email for welcome instructions, then login with your credentials.",
+          "success"
+        );
         setAuthMode("login");
+        setAuthForm({ name: "", email: "", password: "", role: "student" });
       }
     } catch (error) {
       showMessage(error.message, "error");
@@ -382,6 +621,7 @@ const LearningManagementSystem = () => {
     setActiveSection("dashboard");
   };
 
+  // Updated createTeacher function
   const createTeacher = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -392,7 +632,29 @@ const LearningManagementSystem = () => {
         body: JSON.stringify(teacherForm),
       });
 
-      showMessage("Teacher created successfully!", "success");
+      if (data.emailSent) {
+        showMessage(
+          `Teacher created successfully! Login credentials have been sent to ${teacherForm.email}`,
+          "success"
+        );
+        setEmailStatus({
+          type: 'success',
+          message: `Credentials emailed to ${teacherForm.email}`,
+          email: teacherForm.email
+        });
+      } else {
+        showMessage(
+          "Teacher created successfully, but email could not be sent. Please provide credentials manually.",
+          "warning"
+        );
+        setEmailStatus({
+          type: 'warning',
+          message: 'Email could not be sent',
+          email: teacherForm.email,
+          showResend: true
+        });
+      }
+
       setShowCredentials(data.credentials);
       setTeacherForm({ name: "", email: "" });
       fetchTeachers();
@@ -440,6 +702,7 @@ const LearningManagementSystem = () => {
     setLoading(false);
   };
 
+  // Updated createStudent function
   const createStudent = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -450,7 +713,29 @@ const LearningManagementSystem = () => {
         body: JSON.stringify(studentForm),
       });
 
-      showMessage("Student created successfully!", "success");
+      if (data.emailSent) {
+        showMessage(
+          `Student created successfully! Login credentials have been sent to ${studentForm.email}`,
+          "success"
+        );
+        setEmailStatus({
+          type: 'success',
+          message: `Credentials emailed to ${studentForm.email}`,
+          email: studentForm.email
+        });
+      } else {
+        showMessage(
+          "Student created successfully, but email could not be sent. Please provide credentials manually.",
+          "warning"
+        );
+        setEmailStatus({
+          type: 'warning',
+          message: 'Email could not be sent',
+          email: studentForm.email,
+          showResend: true
+        });
+      }
+
       setShowCredentials(data.credentials);
       setStudentForm({ name: "", email: "" });
       fetchTeacherStudents();
@@ -461,6 +746,55 @@ const LearningManagementSystem = () => {
     setLoading(false);
   };
 
+  // Resend credentials function
+  const resendCredentials = async (userId, userEmail) => {
+    setResendingEmail(true);
+    try {
+      const data = await apiCall("/resend-credentials", {
+        method: "POST",
+        body: JSON.stringify({ userId }),
+      });
+
+      if (data.emailSent) {
+        showMessage(
+          `Credentials have been resent to ${userEmail}`,
+          "success"
+        );
+        setEmailStatus({
+          type: 'success',
+          message: `Credentials resent to ${userEmail}`,
+          email: userEmail
+        });
+      } else {
+        showMessage("Failed to resend credentials", "error");
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+    setResendingEmail(false);
+  };
+
+  // Test email function (for admins)
+  const testEmailConfiguration = async () => {
+    const testEmail = prompt("Enter email address to send test email:");
+    if (!testEmail) return;
+
+    setLoading(true);
+    try {
+      const data = await apiCall("/test-email", {
+        method: "POST",
+        body: JSON.stringify({ testEmail }),
+      });
+
+      showMessage(
+        `Test email sent successfully to ${testEmail}`,
+        "success"
+      );
+    } catch (error) {
+      showMessage(`Test email failed: ${error.message}`, "error");
+    }
+    setLoading(false);
+  };
   const deleteStudent = async (studentId) => {
     if (
       !window.confirm(
@@ -494,7 +828,12 @@ const LearningManagementSystem = () => {
       });
 
       showMessage("Course created successfully!", "success");
-      setCourseForm({ title: "", description: "", duration_days: 30 });
+      setCourseForm({
+        title: "",
+        description: "",
+        duration_days: 30,
+        group_link: "" // Add this line
+      });
       fetchCourses();
       setSelectedCourse(null);
       setActiveSection("courses");
@@ -504,6 +843,7 @@ const LearningManagementSystem = () => {
 
     setLoading(false);
   };
+
 
   const updateCourse = async (e) => {
     e.preventDefault();
@@ -517,13 +857,71 @@ const LearningManagementSystem = () => {
 
       showMessage("Course updated successfully!", "success");
       setEditingCourse(null);
-      setCourseForm({ title: "", description: "", duration_days: 30 });
+      setCourseForm({
+        title: "",
+        description: "",
+        duration_days: 30,
+        group_link: "" // Add this line
+      });
       fetchCourses();
     } catch (error) {
       showMessage(error.message, "error");
     }
 
     setLoading(false);
+  };
+
+  // Add new function to update group link
+  const updateGroupLink = async (courseId, groupLink) => {
+    setGroupLinkLoading(true);
+    try {
+      await apiCall(`/courses/${courseId}/group-link`, {
+        method: "PUT",
+        body: JSON.stringify({ group_link: groupLink }),
+      });
+
+      showMessage(
+        groupLink
+          ? "Group link updated successfully!"
+          : "Group link removed successfully!",
+        "success"
+      );
+
+      setCourseGroupLink(groupLink || null);
+      setGroupLinkForm("");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+    setGroupLinkLoading(false);
+  };
+
+  // Add function to fetch course group link
+  const fetchCourseGroupLink = async (courseId) => {
+    try {
+      const data = await apiCall(`/courses/${courseId}/group-link`);
+      setCourseGroupLink(data.group_link);
+    } catch (error) {
+      console.error("Fetch group link error:", error);
+      setCourseGroupLink(null);
+    }
+  };
+
+  // Add function to join group
+  const joinGroup = async (courseId, groupLink) => {
+    try {
+      // Track the group join activity
+      await apiCall(`/courses/${courseId}/group-join`, {
+        method: "POST",
+      });
+
+      // Open the group link in a new tab
+      window.open(groupLink, '_blank');
+      showMessage("Redirecting to group...", "success");
+    } catch (error) {
+      // Still redirect even if tracking fails
+      window.open(groupLink, '_blank');
+      console.error("Group join tracking error:", error);
+    }
   };
 
   const deleteCourse = async (courseId) => {
@@ -912,8 +1310,17 @@ const LearningManagementSystem = () => {
       title: course.title,
       description: course.description,
       duration_days: course.duration_days,
+      group_link: course.group_link || ""
     });
   };
+
+  // Add this useEffect to fetch group link when course is selected
+  useEffect(() => {
+    if (selectedCourse && selectedCourse !== "create" && selectedCourse.id) {
+      fetchCourseGroupLink(selectedCourse.id);
+    }
+  }, [selectedCourse]);
+
   // Add these to your state variables
   const [teacherReceipts, setTeacherReceipts] = useState([]);
   const [receiptSearch, setReceiptSearch] = useState("");
@@ -1024,13 +1431,12 @@ const LearningManagementSystem = () => {
 
           {message && (
             <div
-              className={`mb-4 p-3 rounded-xl backdrop-blur-sm ${
-                message.type === "error"
-                  ? "bg-red-500/20 text-red-200 border border-red-500/30"
-                  : message.type === "success"
+              className={`mb-4 p-3 rounded-xl backdrop-blur-sm ${message.type === "error"
+                ? "bg-red-500/20 text-red-200 border border-red-500/30"
+                : message.type === "success"
                   ? "bg-green-500/20 text-green-200 border border-green-500/30"
                   : "bg-blue-500/20 text-blue-200 border border-blue-500/30"
-              }`}
+                }`}
             >
               {message.text}
             </div>
@@ -1118,8 +1524,8 @@ const LearningManagementSystem = () => {
               {loading
                 ? "Processing..."
                 : authMode === "login"
-                ? "Sign In"
-                : "Create Account"}
+                  ? "Sign In"
+                  : "Create Account"}
             </button>
           </form>
 
@@ -1200,13 +1606,12 @@ const LearningManagementSystem = () => {
       {message && (
         <div className="px-4 sm:px-6 lg:px-8 pt-4 relative z-30">
           <div
-            className={`p-3 rounded-xl backdrop-blur-sm ${
-              message.type === "error"
-                ? "bg-red-500/20 text-red-200 border border-red-500/30"
-                : message.type === "success"
+            className={`p-3 rounded-xl backdrop-blur-sm ${message.type === "error"
+              ? "bg-red-500/20 text-red-200 border border-red-500/30"
+              : message.type === "success"
                 ? "bg-green-500/20 text-green-200 border border-green-500/30"
                 : "bg-blue-500/20 text-blue-200 border border-blue-500/30"
-            }`}
+              }`}
           >
             {message.text}
           </div>
@@ -1217,28 +1622,101 @@ const LearningManagementSystem = () => {
       {showCredentials && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-slate-800/90 backdrop-blur-md rounded-2xl p-6 w-full max-w-md border border-white/20">
-            <h3 className="text-lg font-semibold mb-4 text-white">
-              Account Created Successfully
-            </h3>
+            <div className="flex items-center mb-4">
+              <div className="h-10 w-10 bg-green-500/20 rounded-full flex items-center justify-center mr-3">
+                <CheckCircle className="h-5 w-5 text-green-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-white">
+                Account Created Successfully
+              </h3>
+            </div>
+
+            {/* Email Status */}
+            {emailStatus && (
+              <div className={`mb-4 p-3 rounded-xl border ${emailStatus.type === 'success'
+                ? 'bg-green-500/20 border-green-500/30 text-green-200'
+                : emailStatus.type === 'warning'
+                  ? 'bg-yellow-500/20 border-yellow-500/30 text-yellow-200'
+                  : 'bg-red-500/20 border-red-500/30 text-red-200'
+                }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center">
+                    {emailStatus.type === 'success' ? (
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                    ) : emailStatus.type === 'warning' ? (
+                      <AlertCircle className="h-4 w-4 mr-2" />
+                    ) : (
+                      <X className="h-4 w-4 mr-2" />
+                    )}
+                    <span className="text-sm">{emailStatus.message}</span>
+                  </div>
+                  {emailStatus.showResend && (
+                    <button
+                      onClick={() => resendCredentials(showCredentials.userId, emailStatus.email)}
+                      disabled={resendingEmail}
+                      className="text-xs underline hover:no-underline disabled:opacity-50"
+                    >
+                      {resendingEmail ? 'Sending...' : 'Resend'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="bg-slate-700/50 p-4 rounded-xl mb-4 border border-white/10">
               <p className="text-sm text-gray-300 mb-2">Login Credentials:</p>
-              <p className="font-mono text-sm text-white">
-                <strong>Email:</strong> {showCredentials.email}
-              </p>
-              <p className="font-mono text-sm text-white">
-                <strong>Password:</strong> {showCredentials.password}
-              </p>
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Email:</span>
+                  <span className="font-mono text-sm text-white bg-slate-600/50 px-2 py-1 rounded">
+                    {showCredentials.email}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Password:</span>
+                  <span className="font-mono text-sm text-white bg-slate-600/50 px-2 py-1 rounded">
+                    {showCredentials.password}
+                  </span>
+                </div>
+              </div>
             </div>
-            <p className="text-sm text-gray-400 mb-4">
-              Please save these credentials. The user should change their
-              password after first login.
-            </p>
-            <button
-              onClick={() => setShowCredentials(null)}
-              className="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white py-2 px-4 rounded-xl hover:from-purple-600 hover:to-pink-600 transition-all"
-            >
-              Close
-            </button>
+
+            <div className="bg-yellow-500/20 border border-yellow-500/30 p-3 rounded-xl mb-4">
+              <div className="flex items-start">
+                <AlertCircle className="h-4 w-4 text-yellow-400 mr-2 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-yellow-200 text-sm font-medium">Security Notice</p>
+                  <p className="text-yellow-200/80 text-xs">
+                    {emailStatus?.type === 'success'
+                      ? "The user has been emailed their credentials and should change their password after first login."
+                      : "Please share these credentials securely with the user and ask them to change their password after first login."
+                    }
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  setShowCredentials(null);
+                  setEmailStatus(null);
+                }}
+                className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white py-2 px-4 rounded-xl hover:from-purple-600 hover:to-pink-600 transition-all"
+              >
+                Close
+              </button>
+              {emailStatus?.showResend && (
+                <button
+                  onClick={() => resendCredentials(showCredentials.userId, emailStatus.email)}
+                  disabled={resendingEmail}
+                  className="bg-blue-600 text-white py-2 px-4 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center"
+                >
+                  <Send className="h-3 w-3 mr-1" />
+                  {resendingEmail ? 'Sending...' : 'Resend Email'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1346,12 +1824,204 @@ const LearningManagementSystem = () => {
         </div>
       )}
 
+      {/* Assignment Submissions Modal */}
+      {/* Assignment Submissions Modal - Updated */}
+      {selectedAssignment && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800/90 backdrop-blur-md rounded-2xl w-full max-w-4xl h-[600px] border border-white/20 flex flex-col">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-white/10 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  Assignment Submissions
+                </h3>
+                <p className="text-sm text-gray-400">
+                  {selectedAssignment.title}
+                </p>
+                <p className="text-xs text-gray-500">
+                  Due Date: {new Date(selectedAssignment.end_date).toLocaleDateString()}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedAssignment(null);
+                  setAssignmentSubmissions([]);
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 p-4 overflow-y-auto">
+              <div className="space-y-4">
+                {assignmentSubmissions.map((submission) => (
+                  <div
+                    key={submission.id}
+                    className="bg-slate-700/30 rounded-xl p-4 border border-white/10"
+                  >
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <h4 className="font-medium text-white">
+                            {submission.student_name}
+                          </h4>
+                          {submission.is_after_due_date && (
+                            <span className="px-2 py-1 bg-orange-500/20 text-orange-300 text-xs rounded-full border border-orange-500/30">
+                              Submitted After Due Date
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-400">
+                          {submission.student_email}
+                        </p>
+                        <div className="flex items-center gap-4 text-sm text-gray-400 mt-1">
+                          <span>
+                            Submitted: {new Date(submission.submitted_at).toLocaleString()}
+                          </span>
+                          {submission.is_after_due_date && (
+                            <span className="text-orange-300">
+                              ({Math.ceil((new Date(submission.submitted_at) - new Date(submission.assignment_end_date)) / (1000 * 60 * 60 * 24))} days late)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mt-3 space-y-2">
+                          {submission.submission_link && (
+                            <div>
+                              <span className="text-gray-400 text-sm">Link: </span>
+                              <a
+                                href={submission.submission_link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-purple-400 hover:text-purple-300 text-sm break-all"
+                              >
+                                {submission.submission_link}
+                              </a>
+                            </div>
+                          )}
+                          {submission.submission_file && (
+                            <div>
+                              <span className="text-gray-400 text-sm">File: </span>
+                              <a
+                                href={`http://localhost:5002/uploads/${submission.submission_file}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-purple-400 hover:text-purple-300 text-sm inline-flex items-center"
+                              >
+                                <Download className="h-3 w-3 mr-1" />
+                                Download File
+                              </a>
+                            </div>
+                          )}
+                          {submission.message && (
+                            <div>
+                              <span className="text-gray-400 text-sm">Message: </span>
+                              <p className="text-gray-300 text-sm mt-1 bg-slate-600/30 p-2 rounded">
+                                {submission.message}
+                              </p>
+                            </div>
+                          )}
+                          {submission.teacher_feedback && (
+                            <div className="mt-3 p-3 bg-slate-600/50 rounded-xl">
+                              <p className="text-sm font-medium text-gray-300">
+                                Your Feedback:
+                              </p>
+                              <p className="text-sm text-gray-400 mt-1">
+                                {submission.teacher_feedback}
+                              </p>
+                            </div>
+                          )}
+                          {submission.verified_by_name && (
+                            <p className="text-sm text-gray-400 mt-2">
+                              Verified by: {submission.verified_by_name} on {new Date(submission.verified_at).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col items-end space-y-2 ml-4">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-3 py-1 rounded-full text-sm font-medium ${submission.status === "approved"
+                                ? "bg-green-500/20 text-green-300 border border-green-500/30"
+                                : submission.status === "rejected"
+                                  ? "bg-red-500/20 text-red-300 border border-red-500/30"
+                                  : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
+                              }`}
+                          >
+                            {submission.status.charAt(0).toUpperCase() + submission.status.slice(1)}
+                          </span>
+                        </div>
+
+                        {submission.status === "submitted" && (
+                          <div className="flex flex-col space-y-2">
+                            <textarea
+                              placeholder="Feedback (optional)"
+                              value={assignmentFeedback}
+                              onChange={(e) => setAssignmentFeedback(e.target.value)}
+                              className="w-48 px-3 py-2 bg-slate-600/50 border border-white/20 rounded-xl text-sm text-white"
+                              rows="2"
+                            />
+                            <div className="flex space-x-2">
+                              <button
+                                onClick={() =>
+                                  verifyAssignmentSubmission(
+                                    submission.id,
+                                    "approved",
+                                    assignmentFeedback
+                                  )
+                                }
+                                disabled={loading}
+                                className="bg-green-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center"
+                              >
+                                <CheckCircle className="h-3 w-3 mr-1" />
+                                Approve
+                              </button>
+                              <button
+                                onClick={() =>
+                                  verifyAssignmentSubmission(
+                                    submission.id,
+                                    "rejected",
+                                    assignmentFeedback
+                                  )
+                                }
+                                disabled={loading}
+                                className="bg-red-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center"
+                              >
+                                <AlertCircle className="h-3 w-3 mr-1" />
+                                Reject
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {assignmentSubmissions.length === 0 && (
+                  <div className="text-center py-8">
+                    <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                      <FileText className="h-8 w-8 text-gray-400" />
+                    </div>
+                    <p className="text-gray-400">
+                      No submissions yet.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex">
         {/* Sidebar */}
         <div
-          className={`${
-            sidebarOpen ? "translate-x-0" : "-translate-x-full"
-          } fixed lg:relative lg:translate-x-0 inset-y-0 left-0 z-30 w-64 bg-slate-800/50 backdrop-blur-md border-r border-white/10 transition-transform duration-300 ease-in-out lg:block`}
+          className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"
+            } fixed lg:relative lg:translate-x-0 inset-y-0 left-0 z-30 w-64 bg-slate-800/50 backdrop-blur-md border-r border-white/10 transition-transform duration-300 ease-in-out lg:block`}
         >
           <div className="p-6">
             <nav className="space-y-2">
@@ -1361,11 +2031,10 @@ const LearningManagementSystem = () => {
                   setSelectedCourse(null);
                   setSidebarOpen(false);
                 }}
-                className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                  activeSection === "dashboard"
-                    ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
-                    : "text-gray-300 hover:bg-white/10 hover:text-white"
-                }`}
+                className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "dashboard"
+                  ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                  : "text-gray-300 hover:bg-white/10 hover:text-white"
+                  }`}
               >
                 <Home className="h-5 w-5 mr-3" />
                 Dashboard
@@ -1379,11 +2048,10 @@ const LearningManagementSystem = () => {
                       setSelectedCourse(null);
                       setSidebarOpen(false);
                     }}
-                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                      activeSection === "teachers"
-                        ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
-                        : "text-gray-300 hover:bg-white/10 hover:text-white"
-                    }`}
+                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "teachers"
+                      ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                      : "text-gray-300 hover:bg-white/10 hover:text-white"
+                      }`}
                   >
                     <Users className="h-5 w-5 mr-3" />
                     Teachers
@@ -1398,11 +2066,10 @@ const LearningManagementSystem = () => {
                     setSelectedCourse(null);
                     setSidebarOpen(false);
                   }}
-                  className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                    activeSection === "courses"
-                      ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
-                      : "text-gray-300 hover:bg-white/10 hover:text-white"
-                  }`}
+                  className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "courses"
+                    ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                    : "text-gray-300 hover:bg-white/10 hover:text-white"
+                    }`}
                 >
                   <BookOpen className="h-5 w-5 mr-3" />
                   Courses
@@ -1417,11 +2084,10 @@ const LearningManagementSystem = () => {
                       setSelectedCourse(null);
                       setSidebarOpen(false);
                     }}
-                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                      activeSection === "students"
-                        ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
-                        : "text-gray-300 hover:bg-white/10 hover:text-white"
-                    }`}
+                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "students"
+                      ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                      : "text-gray-300 hover:bg-white/10 hover:text-white"
+                      }`}
                   >
                     <GraduationCap className="h-5 w-5 mr-3" />
                     My Students
@@ -1432,11 +2098,10 @@ const LearningManagementSystem = () => {
                       setSelectedCourse(null);
                       setSidebarOpen(false);
                     }}
-                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                      activeSection === "receipts"
-                        ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
-                        : "text-gray-300 hover:bg-white/10 hover:text-white"
-                    }`}
+                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "receipts"
+                      ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                      : "text-gray-300 hover:bg-white/10 hover:text-white"
+                      }`}
                   >
                     <Receipt className="h-5 w-5 mr-3" />
                     Payment Receipts
@@ -1452,11 +2117,10 @@ const LearningManagementSystem = () => {
                       setSelectedCourse(null);
                       setSidebarOpen(false);
                     }}
-                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                      activeSection === "certificates"
-                        ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
-                        : "text-gray-300 hover:bg-white/10 hover:text-white"
-                    }`}
+                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "certificates"
+                      ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                      : "text-gray-300 hover:bg-white/10 hover:text-white"
+                      }`}
                   >
                     <Award className="h-5 w-5 mr-3" />
                     Certificates
@@ -1467,11 +2131,10 @@ const LearningManagementSystem = () => {
                       setSelectedCourse(null);
                       setSidebarOpen(false);
                     }}
-                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                      activeSection === "my-receipts"
-                        ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
-                        : "text-gray-300 hover:bg-white/10 hover:text-white"
-                    }`}
+                    className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "my-receipts"
+                      ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                      : "text-gray-300 hover:bg-white/10 hover:text-white"
+                      }`}
                   >
                     <CreditCard className="h-5 w-5 mr-3" />
                     My Receipts
@@ -1485,11 +2148,10 @@ const LearningManagementSystem = () => {
                   setSelectedCourse(null);
                   setSidebarOpen(false);
                 }}
-                className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                  activeSection === "settings"
-                    ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
-                    : "text-gray-300 hover:bg-white/10 hover:text-white"
-                }`}
+                className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "settings"
+                  ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                  : "text-gray-300 hover:bg-white/10 hover:text-white"
+                  }`}
               >
                 <Settings className="h-5 w-5 mr-3" />
                 Settings
@@ -1619,14 +2281,14 @@ const LearningManagementSystem = () => {
                     <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10 hover:border-purple-500/30 transition-all duration-200">
                       <div className="flex items-center">
                         <div className="h-12 w-12 bg-gradient-to-r from-purple-400 to-purple-600 rounded-xl flex items-center justify-center">
-                          <Calendar className="h-6 w-6 text-white" />
+                          <FileText className="h-6 w-6 text-white" />
                         </div>
                         <div className="ml-4">
                           <p className="text-sm font-medium text-gray-400">
-                            Sessions
+                            Assignments
                           </p>
                           <p className="text-2xl font-bold text-white">
-                            {dashboardStats.sessions || 0}
+                            {dashboardStats.assignments || 0}
                           </p>
                         </div>
                       </div>
@@ -1634,14 +2296,14 @@ const LearningManagementSystem = () => {
                     <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10 hover:border-orange-500/30 transition-all duration-200">
                       <div className="flex items-center">
                         <div className="h-12 w-12 bg-gradient-to-r from-orange-400 to-orange-600 rounded-xl flex items-center justify-center">
-                          <FileText className="h-6 w-6 text-white" />
+                          <Clock className="h-6 w-6 text-white" />
                         </div>
                         <div className="ml-4">
                           <p className="text-sm font-medium text-gray-400">
-                            Pending Projects
+                            Pending Reviews
                           </p>
                           <p className="text-2xl font-bold text-white">
-                            {dashboardStats.pendingProjects || 0}
+                            {dashboardStats.pendingAssignments || 0}
                           </p>
                         </div>
                       </div>
@@ -1937,11 +2599,10 @@ const LearningManagementSystem = () => {
                           Status
                         </label>
                         <span
-                          className={`inline-flex px-4 py-3 rounded-xl text-sm font-medium ${
-                            user.status === "active"
-                              ? "bg-green-500/20 text-green-300 border border-green-500/30"
-                              : "bg-red-500/20 text-red-300 border border-red-500/30"
-                          }`}
+                          className={`inline-flex px-4 py-3 rounded-xl text-sm font-medium ${user.status === "active"
+                            ? "bg-green-500/20 text-green-300 border border-green-500/30"
+                            : "bg-red-500/20 text-red-300 border border-red-500/30"
+                            }`}
                         >
                           {user.status}
                         </span>
@@ -1987,11 +2648,10 @@ const LearningManagementSystem = () => {
                         Status
                       </label>
                       <span
-                        className={`inline-flex px-4 py-3 rounded-xl text-sm font-medium ${
-                          user.status === "active"
-                            ? "bg-green-500/20 text-green-300 border border-green-500/30"
-                            : "bg-red-500/20 text-red-300 border border-red-500/30"
-                        }`}
+                        className={`inline-flex px-4 py-3 rounded-xl text-sm font-medium ${user.status === "active"
+                          ? "bg-green-500/20 text-green-300 border border-green-500/30"
+                          : "bg-red-500/20 text-red-300 border border-red-500/30"
+                          }`}
                       >
                         {user.status}
                       </span>
@@ -2066,6 +2726,51 @@ const LearningManagementSystem = () => {
                   </button>
                 </form>
               </div>
+
+              {/* ADD THIS NEW EMAIL COMPONENT */}
+              {user.role === 'admin' && (
+                <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
+                  <h3 className="text-lg font-semibold text-white mb-4">Email Configuration</h3>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Test Email Configuration
+                      </label>
+                      <div className="flex space-x-2">
+                        <input
+                          type="email"
+                          placeholder="Enter test email address"
+                          className="flex-1 px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                          id="testEmail"
+                        />
+                        <button
+                          onClick={() => {
+                            const email = document.getElementById('testEmail').value;
+                            if (email) testEmailConfiguration(email);
+                          }}
+                          disabled={loading}
+                          className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-6 py-3 rounded-xl hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                        >
+                          <Send className="h-4 w-4 mr-2" />
+                          {loading ? 'Testing...' : 'Test'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
+                      <h4 className="text-sm font-medium text-white mb-2">Email Features</h4>
+                      <ul className="text-sm text-gray-300 space-y-1">
+                        <li>✅ Welcome emails for new users</li>
+                        <li>✅ Automatic credential delivery</li>
+                        <li>✅ Professional HTML templates</li>
+                        <li>✅ Resend functionality</li>
+                        <li>✅ Mobile-responsive design</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* System Information */}
               <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
@@ -2169,9 +2874,20 @@ const LearningManagementSystem = () => {
 
               {/* Teachers List */}
               <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-                <h3 className="text-lg font-semibold text-white mb-4">
-                  Teachers
-                </h3>
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-semibold text-white">Teachers</h3>
+                  {user.role === "admin" && (
+                    <button
+                      onClick={testEmailConfiguration}
+                      disabled={loading}
+                      className="bg-blue-600/80 text-white px-3 py-1 rounded-lg hover:bg-blue-700 transition-colors text-sm flex items-center"
+                    >
+                      <Send className="h-3 w-3 mr-1" />
+                      Test Email
+                    </button>
+                  )}
+                </div>
+
                 <div className="space-y-4">
                   {teachers.map((teacher) => (
                     <div
@@ -2183,41 +2899,39 @@ const LearningManagementSystem = () => {
                           <User className="h-6 w-6 text-white" />
                         </div>
                         <div>
-                          <h4 className="font-medium text-white">
-                            {teacher.name}
-                          </h4>
-                          <p className="text-sm text-gray-400">
-                            {teacher.email}
-                          </p>
+                          <h4 className="font-medium text-white">{teacher.name}</h4>
+                          <p className="text-sm text-gray-400">{teacher.email}</p>
                           <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
                             <span>Courses: {teacher.course_count || 0}</span>
-                            <span>
-                              Created:{" "}
-                              {new Date(
-                                teacher.created_at
-                              ).toLocaleDateString()}
-                            </span>
-                            <span
-                              className={`px-2 py-1 rounded-full text-xs ${
-                                teacher.status === "active"
-                                  ? "bg-green-500/20 text-green-300"
-                                  : "bg-red-500/20 text-red-300"
-                              }`}
-                            >
+                            <span>Created: {new Date(teacher.created_at).toLocaleDateString()}</span>
+                            <span className={`px-2 py-1 rounded-full text-xs ${teacher.status === "active"
+                              ? "bg-green-500/20 text-green-300"
+                              : "bg-red-500/20 text-red-300"
+                              }`}>
                               {teacher.status}
                             </span>
                           </div>
                         </div>
                       </div>
                       <div className="flex space-x-2">
+                        {/* ADD THIS NEW RESEND BUTTON */}
+                        <button
+                          onClick={() => resendCredentials(teacher.id, teacher.email)}
+                          disabled={resendingEmail}
+                          className="bg-blue-600/80 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm flex items-center"
+                          title="Resend login credentials"
+                        >
+                          <Send className="h-3 w-3 mr-1" />
+                          Resend
+                        </button>
+                        {/* Keep your existing buttons */}
                         <button
                           onClick={() => toggleTeacherStatus(teacher.id)}
                           disabled={loading}
-                          className={`px-4 py-2 rounded-xl transition-all duration-200 flex items-center ${
-                            teacher.status === "active"
-                              ? "bg-red-500/80 text-white hover:bg-red-600"
-                              : "bg-green-500/80 text-white hover:bg-green-600"
-                          }`}
+                          className={`px-4 py-2 rounded-xl transition-all duration-200 flex items-center ${teacher.status === "active"
+                            ? "bg-red-500/80 text-white hover:bg-red-600"
+                            : "bg-green-500/80 text-white hover:bg-green-600"
+                            }`}
                         >
                           {teacher.status === "active" ? (
                             <>
@@ -2649,11 +3363,10 @@ const LearningManagementSystem = () => {
                           <button
                             key={page}
                             onClick={() => setCurrentPage(page)}
-                            className={`px-3 py-2 rounded-lg text-sm transition-colors ${
-                              currentPage === page
-                                ? "bg-purple-500 text-white"
-                                : "bg-slate-700/50 text-gray-300 hover:bg-slate-600"
-                            }`}
+                            className={`px-3 py-2 rounded-lg text-sm transition-colors ${currentPage === page
+                              ? "bg-purple-500 text-white"
+                              : "bg-slate-700/50 text-gray-300 hover:bg-slate-600"
+                              }`}
                           >
                             {page}
                           </button>
@@ -2755,12 +3468,12 @@ const LearningManagementSystem = () => {
                         ₹
                         {teacherReceipts.length > 0
                           ? (
-                              teacherReceipts.reduce(
-                                (sum, receipt) =>
-                                  sum + parseFloat(receipt.total_amount),
-                                0
-                              ) / teacherReceipts.length
-                            ).toFixed(2)
+                            teacherReceipts.reduce(
+                              (sum, receipt) =>
+                                sum + parseFloat(receipt.total_amount),
+                              0
+                            ) / teacherReceipts.length
+                          ).toFixed(2)
                           : "0.00"}
                       </p>
                     </div>
@@ -2844,7 +3557,7 @@ const LearningManagementSystem = () => {
           {activeSection === "courses" && (
             <div className="space-y-6">
               {selectedCourse === "create" ? (
-                /* Create Course Form */
+                /* Enhanced Create Course Form */
                 <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
                   <h2 className="text-xl font-semibold text-white mb-6">
                     Create New Course
@@ -2886,22 +3599,41 @@ const LearningManagementSystem = () => {
                         placeholder="Enter course description"
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Duration (Days)
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={courseForm.duration_days}
-                        onChange={(e) =>
-                          setCourseForm({
-                            ...courseForm,
-                            duration_days: parseInt(e.target.value),
-                          })
-                        }
-                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
-                      />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Duration (Days)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={courseForm.duration_days}
+                          onChange={(e) =>
+                            setCourseForm({
+                              ...courseForm,
+                              duration_days: parseInt(e.target.value),
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Group Link (Optional)
+                        </label>
+                        <input
+                          type="url"
+                          value={courseForm.group_link}
+                          onChange={(e) =>
+                            setCourseForm({
+                              ...courseForm,
+                              group_link: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                          placeholder="https://chat.whatsapp.com/..."
+                        />
+                      </div>
                     </div>
                     <div className="flex space-x-3">
                       <button
@@ -2922,7 +3654,7 @@ const LearningManagementSystem = () => {
                   </form>
                 </div>
               ) : editingCourse ? (
-                /* Edit Course Form */
+                /* Enhanced Edit Course Form */
                 <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
                   <h2 className="text-xl font-semibold text-white mb-6">
                     Edit Course
@@ -2962,22 +3694,41 @@ const LearningManagementSystem = () => {
                         rows="3"
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Duration (Days)
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={courseForm.duration_days}
-                        onChange={(e) =>
-                          setCourseForm({
-                            ...courseForm,
-                            duration_days: parseInt(e.target.value),
-                          })
-                        }
-                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
-                      />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Duration (Days)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={courseForm.duration_days}
+                          onChange={(e) =>
+                            setCourseForm({
+                              ...courseForm,
+                              duration_days: parseInt(e.target.value),
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Group Link (Optional)
+                        </label>
+                        <input
+                          type="url"
+                          value={courseForm.group_link}
+                          onChange={(e) =>
+                            setCourseForm({
+                              ...courseForm,
+                              group_link: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                          placeholder="https://chat.whatsapp.com/..."
+                        />
+                      </div>
                     </div>
                     <div className="flex space-x-3">
                       <button
@@ -2995,6 +3746,7 @@ const LearningManagementSystem = () => {
                             title: "",
                             description: "",
                             duration_days: 30,
+                            group_link: ""
                           });
                         }}
                         className="bg-slate-600 text-white px-6 py-3 rounded-xl hover:bg-slate-700 transition-all duration-200"
@@ -3005,12 +3757,12 @@ const LearningManagementSystem = () => {
                   </form>
                 </div>
               ) : selectedCourse ? (
-                /* Course Details with Tabs */
+                /* Enhanced Course Details with Group Link Management */
                 <div className="space-y-6">
-                  {/* Course Header */}
+                  {/* Course Header with Group Link */}
                   <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
                     <div className="flex justify-between items-start">
-                      <div>
+                      <div className="flex-1">
                         <h2 className="text-2xl font-bold text-white">
                           {selectedCourse.title}
                         </h2>
@@ -3022,8 +3774,38 @@ const LearningManagementSystem = () => {
                             Duration: {selectedCourse.duration_days} days
                           </p>
                         )}
+
+                        {/* Group Link Display for Students */}
+                        {user.role === "student" && courseGroupLink && (
+                          <div className="mt-4 p-4 bg-gradient-to-r from-green-500/20 to-blue-500/20 rounded-xl border border-green-500/30">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h3 className="text-green-300 font-medium">Join Study Group</h3>
+                                <p className="text-green-200/80 text-sm">Connect with your classmates</p>
+                              </div>
+                              <button
+                                onClick={() => joinGroup(selectedCourse.id, courseGroupLink)}
+                                className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-4 py-2 rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all duration-200 flex items-center"
+                              >
+                                <Users className="h-4 w-4 mr-2" />
+                                Join Group
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* No Group Link Message for Students */}
+                        {user.role === "student" && !courseGroupLink && (
+                          <div className="mt-4 p-4 bg-slate-700/30 rounded-xl border border-white/10">
+                            <div className="flex items-center">
+                              <Users className="h-4 w-4 text-gray-400 mr-2" />
+                              <p className="text-gray-400 text-sm">No study group available for this course yet.</p>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <div className="flex space-x-2">
+
+                      <div className="flex space-x-2 ml-4">
                         {user.role === "teacher" && (
                           <>
                             <button
@@ -3052,13 +3834,14 @@ const LearningManagementSystem = () => {
                     </div>
                   </div>
 
-                  {/* Tabs */}
+                  {/* Enhanced Tabs with Overview */}
                   <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl border border-white/10">
                     <div className="border-b border-white/10">
                       <nav className="flex space-x-8 px-6">
                         {[
                           "overview",
                           "sessions",
+                          "assignments", // Add this line
                           user.role === "teacher" ? "students" : "project",
                           user.role === "teacher" ? "projects" : null,
                           user.role === "teacher" ? "attendance" : null,
@@ -3068,11 +3851,10 @@ const LearningManagementSystem = () => {
                             <button
                               key={tab}
                               onClick={() => setActiveTab(tab)}
-                              className={`py-4 px-1 border-b-2 font-medium text-sm capitalize transition-colors ${
-                                activeTab === tab
-                                  ? "border-purple-500 text-purple-400"
-                                  : "border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-500"
-                              }`}
+                              className={`py-4 px-1 border-b-2 font-medium text-sm capitalize transition-colors ${activeTab === tab
+                                ? "border-purple-500 text-purple-400"
+                                : "border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-500"
+                                }`}
                             >
                               {tab}
                             </button>
@@ -3081,12 +3863,84 @@ const LearningManagementSystem = () => {
                     </div>
 
                     <div className="p-6">
-                      {/* Overview Tab */}
+                      {/* Enhanced Overview Tab with Group Management */}
                       {activeTab === "overview" && (
-                        <div className="space-y-4">
+                        <div className="space-y-6">
                           <h3 className="text-lg font-semibold text-white">
                             Course Overview
                           </h3>
+
+                          {/* Group Link Management for Teachers */}
+                          {user.role === "teacher" && (
+                            <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
+                              <h4 className="text-lg font-medium text-white mb-4">Study Group Management</h4>
+
+                              {courseGroupLink ? (
+                                <div className="space-y-3">
+                                  <div className="flex items-center justify-between p-3 bg-green-500/20 rounded-xl border border-green-500/30">
+                                    <div>
+                                      <p className="text-green-300 font-medium">Group Link Active</p>
+                                      <p className="text-green-200/80 text-sm">Students can join the study group</p>
+                                      <p className="text-green-200/60 text-xs mt-1 font-mono break-all">
+                                        {courseGroupLink}
+                                      </p>
+                                    </div>
+                                    <div className="flex space-x-2">
+                                      <button
+                                        onClick={() => window.open(courseGroupLink, '_blank')}
+                                        className="bg-green-600 text-white px-3 py-1 rounded-lg hover:bg-green-700 transition-colors text-sm flex items-center"
+                                      >
+                                        <ExternalLink className="h-3 w-3 mr-1" />
+                                        Visit
+                                      </button>
+                                      <button
+                                        onClick={() => updateGroupLink(selectedCourse.id, "")}
+                                        disabled={groupLinkLoading}
+                                        className="bg-red-600 text-white px-3 py-1 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors text-sm flex items-center"
+                                      >
+                                        <Trash2 className="h-3 w-3 mr-1" />
+                                        Remove
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="space-y-3">
+                                  <div className="p-3 bg-slate-600/30 rounded-xl border border-white/10">
+                                    <p className="text-gray-300 text-sm">No study group link set. Add one to help students connect!</p>
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="mt-4">
+                                <label className="block text-sm font-medium text-gray-300 mb-2">
+                                  Add/Update Group Link
+                                </label>
+                                <div className="flex space-x-2">
+                                  <input
+                                    type="url"
+                                    value={groupLinkForm}
+                                    onChange={(e) => setGroupLinkForm(e.target.value)}
+                                    placeholder="https://chat.whatsapp.com/... or any group link"
+                                    className="flex-1 px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                  />
+                                  <button
+                                    onClick={() => updateGroupLink(selectedCourse.id, groupLinkForm)}
+                                    disabled={groupLinkLoading || !groupLinkForm.trim()}
+                                    className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                  >
+                                    <Users className="h-4 w-4 mr-2" />
+                                    {groupLinkLoading ? "Updating..." : "Update"}
+                                  </button>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-2">
+                                  Supported: WhatsApp, Telegram, Discord, Slack, or any group chat link
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Statistics Grid */}
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="bg-blue-500/20 p-4 rounded-xl border border-blue-500/30">
                               <div className="flex items-center">
@@ -3118,25 +3972,100 @@ const LearningManagementSystem = () => {
                             )}
                             <div className="bg-purple-500/20 p-4 rounded-xl border border-purple-500/30">
                               <div className="flex items-center">
-                                <Award className="h-8 w-8 text-purple-400" />
+                                <Users className="h-8 w-8 text-purple-400" />
                                 <div className="ml-3">
                                   <p className="text-sm font-medium text-gray-400">
                                     {user.role === "teacher"
-                                      ? "Certificates Issued"
-                                      : "Your Progress"}
+                                      ? "Study Group"
+                                      : "Group Access"}
                                   </p>
                                   <p className="text-2xl font-bold text-white">
-                                    {user.role === "teacher"
-                                      ? students.filter((s) => s.completed_at)
-                                          .length
-                                      : selectedCourse.completed_at
-                                      ? "100%"
-                                      : "0%"}
+                                    {courseGroupLink ? "Active" : "None"}
                                   </p>
                                 </div>
                               </div>
                             </div>
                           </div>
+
+                          {/* Course Information */}
+                          <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
+                            <h4 className="text-lg font-medium text-white mb-3">Course Information</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                              <div>
+                                <span className="text-gray-400">Duration:</span>
+                                <span className="text-white ml-2">{selectedCourse.duration_days} days</span>
+                              </div>
+                              <div>
+                                <span className="text-gray-400">Created:</span>
+                                <span className="text-white ml-2">
+                                  {new Date(selectedCourse.created_at).toLocaleDateString()}
+                                </span>
+                              </div>
+                              {user.role === "teacher" && (
+                                <>
+                                  <div>
+                                    <span className="text-gray-400">Enrolled Students:</span>
+                                    <span className="text-white ml-2">{students.length}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-400">Total Sessions:</span>
+                                    <span className="text-white ml-2">{sessions.length}</span>
+                                  </div>
+                                </>
+                              )}
+                              {user.role === "student" && (
+                                <>
+                                  <div>
+                                    <span className="text-gray-400">Teacher:</span>
+                                    <span className="text-white ml-2">{selectedCourse.teacher_name}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-400">Status:</span>
+                                    <span className={`ml-2 ${selectedCourse.completed_at ? 'text-green-300' : 'text-blue-300'}`}>
+                                      {selectedCourse.completed_at ? 'Completed' : 'In Progress'}
+                                    </span>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Quick Actions */}
+                          {user.role === "teacher" && (
+                            <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
+                              <h4 className="text-lg font-medium text-white mb-3">Quick Actions</h4>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <button
+                                  onClick={() => setActiveTab("sessions")}
+                                  className="bg-blue-500/20 text-blue-300 p-3 rounded-xl hover:bg-blue-500/30 transition-colors text-center border border-blue-500/30"
+                                >
+                                  <Calendar className="h-5 w-5 mx-auto mb-1" />
+                                  <span className="text-sm">Sessions</span>
+                                </button>
+                                <button
+                                  onClick={() => setActiveTab("students")}
+                                  className="bg-green-500/20 text-green-300 p-3 rounded-xl hover:bg-green-500/30 transition-colors text-center border border-green-500/30"
+                                >
+                                  <Users className="h-5 w-5 mx-auto mb-1" />
+                                  <span className="text-sm">Students</span>
+                                </button>
+                                <button
+                                  onClick={() => setActiveTab("projects")}
+                                  className="bg-purple-500/20 text-purple-300 p-3 rounded-xl hover:bg-purple-500/30 transition-colors text-center border border-purple-500/30"
+                                >
+                                  <FileText className="h-5 w-5 mx-auto mb-1" />
+                                  <span className="text-sm">Projects</span>
+                                </button>
+                                <button
+                                  onClick={() => setActiveTab("attendance")}
+                                  className="bg-yellow-500/20 text-yellow-300 p-3 rounded-xl hover:bg-yellow-500/30 transition-colors text-center border border-yellow-500/30"
+                                >
+                                  <UserCheck className="h-5 w-5 mx-auto mb-1" />
+                                  <span className="text-sm">Attendance</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -3256,8 +4185,8 @@ const LearningManagementSystem = () => {
                                         ? "Updating..."
                                         : "Creating..."
                                       : editingSession
-                                      ? "Update Session"
-                                      : "Create Session"}
+                                        ? "Update Session"
+                                        : "Create Session"}
                                   </button>
                                   {editingSession && (
                                     <button
@@ -3471,15 +4400,14 @@ const LearningManagementSystem = () => {
                                       </span>
                                       {student.project_status && (
                                         <span
-                                          className={`px-2 py-1 rounded text-xs ${
-                                            student.project_status ===
+                                          className={`px-2 py-1 rounded text-xs ${student.project_status ===
                                             "approved"
-                                              ? "bg-green-500/20 text-green-300"
-                                              : student.project_status ===
-                                                "rejected"
+                                            ? "bg-green-500/20 text-green-300"
+                                            : student.project_status ===
+                                              "rejected"
                                               ? "bg-red-500/20 text-red-300"
                                               : "bg-yellow-500/20 text-yellow-300"
-                                          }`}
+                                            }`}
                                         >
                                           Project: {student.project_status}
                                         </span>
@@ -3515,7 +4443,7 @@ const LearningManagementSystem = () => {
                         <div className="space-y-6">
                           {/* Project Submission Form */}
                           {!currentProject ||
-                          currentProject.status === "rejected" ? (
+                            currentProject.status === "rejected" ? (
                             <div className="border-b border-white/10 pb-6">
                               <h3 className="text-lg font-semibold text-white mb-4">
                                 {currentProject?.status === "rejected"
@@ -3652,13 +4580,12 @@ const LearningManagementSystem = () => {
                                     )}
                                   </div>
                                   <span
-                                    className={`px-3 py-1 rounded-full text-sm font-medium ${
-                                      currentProject.status === "approved"
-                                        ? "bg-green-500/20 text-green-300"
-                                        : currentProject.status === "rejected"
+                                    className={`px-3 py-1 rounded-full text-sm font-medium ${currentProject.status === "approved"
+                                      ? "bg-green-500/20 text-green-300"
+                                      : currentProject.status === "rejected"
                                         ? "bg-red-500/20 text-red-300"
                                         : "bg-yellow-500/20 text-yellow-300"
-                                    }`}
+                                      }`}
                                   >
                                     {currentProject.status
                                       .charAt(0)
@@ -3743,13 +4670,12 @@ const LearningManagementSystem = () => {
                                   </div>
                                   <div className="flex flex-col items-end space-y-2 ml-4">
                                     <span
-                                      className={`px-3 py-1 rounded-full text-sm font-medium ${
-                                        project.status === "approved"
-                                          ? "bg-green-500/20 text-green-300"
-                                          : project.status === "rejected"
+                                      className={`px-3 py-1 rounded-full text-sm font-medium ${project.status === "approved"
+                                        ? "bg-green-500/20 text-green-300"
+                                        : project.status === "rejected"
                                           ? "bg-red-500/20 text-red-300"
                                           : "bg-yellow-500/20 text-yellow-300"
-                                      }`}
+                                        }`}
                                     >
                                       {project.status.charAt(0).toUpperCase() +
                                         project.status.slice(1)}
@@ -3965,13 +4891,12 @@ const LearningManagementSystem = () => {
                                     </div>
                                     <div className="text-right">
                                       <span
-                                        className={`px-3 py-1 rounded-full text-sm font-medium ${
-                                          record.status === "present"
-                                            ? "bg-green-500/20 text-green-300"
-                                            : record.status === "late"
+                                        className={`px-3 py-1 rounded-full text-sm font-medium ${record.status === "present"
+                                          ? "bg-green-500/20 text-green-300"
+                                          : record.status === "late"
                                             ? "bg-yellow-500/20 text-yellow-300"
                                             : "bg-red-500/20 text-red-300"
-                                        }`}
+                                          }`}
                                       >
                                         {record.status.charAt(0).toUpperCase() +
                                           record.status.slice(1)}
@@ -3996,6 +4921,391 @@ const LearningManagementSystem = () => {
                             </div>
                           </div>
                         )}
+
+                      {/* Assignments Tab - Updated */}
+                      {activeTab === "assignments" && (
+                        <div className="space-y-6">
+                          {/* Create/Edit Assignment Form for Teachers */}
+                          {user.role === "teacher" && (
+                            <div className="border-b border-white/10 pb-6">
+                              <h3 className="text-lg font-semibold text-white mb-4">
+                                {editingAssignment ? "Edit Assignment" : "Create Assignment"}
+                              </h3>
+                              <form onSubmit={editingAssignment ? updateAssignment : createAssignment} className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Assignment Title *
+                                    </label>
+                                    <input
+                                      type="text"
+                                      required
+                                      value={assignmentForm.title}
+                                      onChange={(e) =>
+                                        setAssignmentForm({
+                                          ...assignmentForm,
+                                          title: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                      placeholder="Assignment title"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Assignment File (Optional)
+                                    </label>
+                                    <input
+                                      type="file"
+                                      onChange={(e) =>
+                                        setAssignmentForm({
+                                          ...assignmentForm,
+                                          assignmentFile: e.target.files[0],
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                      accept=".pdf,.doc,.docx,.txt,.zip,.rar"
+                                    />
+                                  </div>
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                                    Description
+                                  </label>
+                                  <textarea
+                                    value={assignmentForm.description}
+                                    onChange={(e) =>
+                                      setAssignmentForm({
+                                        ...assignmentForm,
+                                        description: e.target.value,
+                                      })
+                                    }
+                                    className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    rows="3"
+                                    placeholder="Assignment description"
+                                  />
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Start Date *
+                                    </label>
+                                    <input
+                                      type="date"
+                                      required
+                                      value={assignmentForm.startDate}
+                                      onChange={(e) =>
+                                        setAssignmentForm({
+                                          ...assignmentForm,
+                                          startDate: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      End Date *
+                                    </label>
+                                    <input
+                                      type="date"
+                                      required
+                                      value={assignmentForm.endDate}
+                                      onChange={(e) =>
+                                        setAssignmentForm({
+                                          ...assignmentForm,
+                                          endDate: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    />
+                                  </div>
+                                </div>
+                                <div className="flex space-x-3">
+                                  <button
+                                    type="submit"
+                                    disabled={loading}
+                                    className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                  >
+                                    <FileText className="h-4 w-4 mr-2" />
+                                    {loading ? (editingAssignment ? "Updating..." : "Creating...") : (editingAssignment ? "Update Assignment" : "Create Assignment")}
+                                  </button>
+                                  {editingAssignment && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingAssignment(null);
+                                        setAssignmentForm({
+                                          title: "",
+                                          description: "",
+                                          startDate: new Date().toISOString().split("T")[0],
+                                          endDate: "",
+                                          assignmentFile: null,
+                                        });
+                                      }}
+                                      className="bg-slate-600 text-white px-6 py-3 rounded-xl hover:bg-slate-700 transition-all duration-200"
+                                    >
+                                      Cancel
+                                    </button>
+                                  )}
+                                </div>
+                              </form>
+                            </div>
+                          )}
+
+                          {/* Assignments List */}
+                          <div>
+                            <h3 className="text-lg font-semibold text-white mb-4">
+                              Course Assignments
+                            </h3>
+                            <div className="space-y-4">
+                              {assignments.map((assignment) => (
+                                <div
+                                  key={assignment.id}
+                                  className="bg-slate-700/30 rounded-xl p-4 border border-white/10"
+                                >
+                                  <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-3 mb-2">
+                                        <h4 className="font-medium text-white">
+                                          {assignment.title}
+                                        </h4>
+                                        {user.role === "student" && assignment.is_overdue && !assignment.submission && (
+                                          <span className="px-2 py-1 bg-orange-500/20 text-orange-300 text-xs rounded-full border border-orange-500/30">
+                                            Past Due
+                                          </span>
+                                        )}
+                                        {user.role === "student" && assignment.submission && (
+                                          <div className="flex items-center gap-2">
+                                            <span
+                                              className={`px-2 py-1 text-xs rounded-full border ${assignment.submission.status === "approved"
+                                                ? "bg-green-500/20 text-green-300 border-green-500/30"
+                                                : assignment.submission.status === "rejected"
+                                                  ? "bg-red-500/20 text-red-300 border-red-500/30"
+                                                  : "bg-yellow-500/20 text-yellow-300 border-yellow-500/30"
+                                                }`}
+                                            >
+                                              {assignment.submission.status}
+                                            </span>
+                                            {assignment.submission.is_after_due_date && (
+                                              <span className="px-2 py-1 bg-orange-500/20 text-orange-300 text-xs rounded-full border border-orange-500/30">
+                                                Submitted After Due Date
+                                              </span>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                      {assignment.description && (
+                                        <p className="text-sm text-gray-300 mb-2">
+                                          {assignment.description}
+                                        </p>
+                                      )}
+                                      <div className="text-sm text-gray-400 space-y-1">
+                                        <p>
+                                          Start: {new Date(assignment.start_date).toLocaleDateString()}
+                                        </p>
+                                        <p>
+                                          Due: {new Date(assignment.end_date).toLocaleDateString()}
+                                        </p>
+                                        {assignment.assignment_file && (
+                                          <a
+                                            href={`http://localhost:5002/uploads/${assignment.assignment_file}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center text-purple-400 hover:text-purple-300"
+                                          >
+                                            <Download className="h-4 w-4 mr-1" />
+                                            Download Assignment File
+                                          </a>
+                                        )}
+                                        {user.role === "teacher" && (
+                                          <p>Submissions: {assignment.submission_count}</p>
+                                        )}
+                                      </div>
+
+                                      {/* Student Submission Form */}
+                                      {user.role === "student" && (!assignment.submission || assignment.submission.status === "rejected") && (
+                                        <div className="mt-4 p-4 bg-slate-600/30 rounded-xl border border-white/10">
+                                          <h5 className="text-white font-medium mb-3">
+                                            {assignment.submission?.status === "rejected" ? "Resubmit Assignment" : "Submit Assignment"}
+                                            {assignment.is_overdue && (
+                                              <span className="text-orange-300 text-sm ml-2">(Past Due Date)</span>
+                                            )}
+                                          </h5>
+                                          {assignment.submission?.status === "rejected" && assignment.submission.teacher_feedback && (
+                                            <div className="mb-3 p-3 bg-red-500/20 border border-red-500/30 rounded-xl">
+                                              <p className="text-red-300 font-medium text-sm">Previous submission was rejected:</p>
+                                              <p className="text-red-200 text-sm mt-1">{assignment.submission.teacher_feedback}</p>
+                                            </div>
+                                          )}
+                                          <form onSubmit={(e) => submitAssignment(e, assignment.id)} className="space-y-3">
+                                            <div>
+                                              <label className="block text-sm font-medium text-gray-300 mb-1">
+                                                Submission Link (GitHub, Drive, etc.)
+                                              </label>
+                                              <input
+                                                type="url"
+                                                value={submissionForm.submissionLink}
+                                                onChange={(e) =>
+                                                  setSubmissionForm({
+                                                    ...submissionForm,
+                                                    submissionLink: e.target.value,
+                                                  })
+                                                }
+                                                className="w-full px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm"
+                                                placeholder="https://github.com/username/repo"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="block text-sm font-medium text-gray-300 mb-1">
+                                                Upload File
+                                              </label>
+                                              <input
+                                                type="file"
+                                                onChange={(e) =>
+                                                  setSubmissionForm({
+                                                    ...submissionForm,
+                                                    submissionFile: e.target.files[0],
+                                                  })
+                                                }
+                                                className="w-full px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm"
+                                                accept=".pdf,.doc,.docx,.zip,.rar,.txt"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="block text-sm font-medium text-gray-300 mb-1">
+                                                Message
+                                              </label>
+                                              <textarea
+                                                value={submissionForm.message}
+                                                onChange={(e) =>
+                                                  setSubmissionForm({
+                                                    ...submissionForm,
+                                                    message: e.target.value,
+                                                  })
+                                                }
+                                                className="w-full px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm"
+                                                rows="2"
+                                                placeholder="Additional message or notes"
+                                              />
+                                            </div>
+                                            <p className="text-xs text-gray-400">
+                                              * At least one of the above fields (link, file, or message) is required
+                                            </p>
+                                            <button
+                                              type="submit"
+                                              disabled={loading || (!submissionForm.submissionLink && !submissionForm.submissionFile && !submissionForm.message)}
+                                              className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-4 py-2 rounded-lg hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 text-sm flex items-center"
+                                            >
+                                              <Upload className="h-3 w-3 mr-1" />
+                                              {loading ? "Submitting..." : (assignment.submission?.status === "rejected" ? "Resubmit Assignment" : "Submit Assignment")}
+                                            </button>
+                                          </form>
+                                        </div>
+                                      )}
+
+                                      {/* Student Submission Display */}
+                                      {user.role === "student" && assignment.submission && assignment.submission.status !== "rejected" && (
+                                        <div className="mt-4 p-4 bg-slate-600/30 rounded-xl border border-white/10">
+                                          <h5 className="text-white font-medium mb-3">Your Submission</h5>
+                                          <div className="space-y-2 text-sm">
+                                            {assignment.submission.submission_link && (
+                                              <div>
+                                                <span className="text-gray-400">Link: </span>
+                                                <a
+                                                  href={assignment.submission.submission_link}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="text-purple-400 hover:text-purple-300"
+                                                >
+                                                  {assignment.submission.submission_link}
+                                                </a>
+                                              </div>
+                                            )}
+                                            {assignment.submission.submission_file && (
+                                              <div>
+                                                <span className="text-gray-400">File: </span>
+                                                <a
+                                                  href={`http://localhost:5002/uploads/${assignment.submission.submission_file}`}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="text-purple-400 hover:text-purple-300"
+                                                >
+                                                  Download Submitted File
+                                                </a>
+                                              </div>
+                                            )}
+                                            {assignment.submission.message && (
+                                              <div>
+                                                <span className="text-gray-400">Message: </span>
+                                                <span className="text-gray-300">
+                                                  {assignment.submission.message}
+                                                </span>
+                                              </div>
+                                            )}
+                                            <div>
+                                              <span className="text-gray-400">Submitted: </span>
+                                              <span className="text-gray-300">
+                                                {new Date(assignment.submission.submitted_at).toLocaleString()}
+                                              </span>
+                                            </div>
+                                            {assignment.submission.teacher_feedback && (
+                                              <div className="mt-3 p-3 bg-slate-700/50 rounded-lg">
+                                                <span className="text-gray-400 font-medium">Teacher Feedback: </span>
+                                                <p className="text-gray-300 mt-1">{assignment.submission.teacher_feedback}</p>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Teacher Actions */}
+                                    {user.role === "teacher" && (
+                                      <div className="flex flex-col space-y-2 ml-4">
+                                        <button
+                                          onClick={() => startEditingAssignment(assignment)}
+                                          className="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center"
+                                        >
+                                          <Edit className="h-3 w-3 mr-1" />
+                                          Edit
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            setSelectedAssignment(assignment);
+                                            fetchAssignmentSubmissions(assignment.id);
+                                          }}
+                                          className="bg-green-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-green-700 transition-colors flex items-center"
+                                        >
+                                          <Eye className="h-3 w-3 mr-1" />
+                                          Submissions
+                                        </button>
+                                        <button
+                                          onClick={() => deleteAssignment(assignment.id)}
+                                          className="bg-red-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-red-700 transition-colors flex items-center"
+                                        >
+                                          <Trash2 className="h-3 w-3 mr-1" />
+                                          Delete
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                              {assignments.length === 0 && (
+                                <div className="text-center py-8">
+                                  <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                    <FileText className="h-8 w-8 text-gray-400" />
+                                  </div>
+                                  <p className="text-gray-400">
+                                    No assignments available yet.
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -4027,8 +5337,18 @@ const LearningManagementSystem = () => {
                           setSelectedCourse(course);
                           setActiveTab("overview");
                         }}
-                        className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 cursor-pointer hover:bg-slate-700/50 transition-all duration-200 border border-white/10 hover:border-purple-500/30 group"
+                        // className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 cursor-pointer hover:bg-slate-700/50 transition-all duration-200 border border-white/10 hover:border-purple-500/30 group"
+                        className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 cursor-pointer hover:bg-slate-700/50 transition-all duration-200 border border-white/10 hover:border-purple-500/30 group relative"
                       >
+                        {/* Group Link Indicator */}
+                        {course.group_link && (
+                          <div className="absolute top-4 right-4">
+                            <div className="bg-green-500/20 text-green-300 px-2 py-1 rounded-full text-xs border border-green-500/30 flex items-center">
+                              <Users className="h-3 w-3 mr-1" />
+                              Group
+                            </div>
+                          </div>
+                        )}
                         <div className="flex items-center mb-4">
                           <div className="h-12 w-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-xl flex items-center justify-center mr-3">
                             <BookOpen className="h-6 w-6 text-white" />
@@ -4056,12 +5376,20 @@ const LearningManagementSystem = () => {
                           {user.role === "student" && (
                             <div className="flex justify-between items-center">
                               <span>Teacher: {course.teacher_name}</span>
-                              {course.completed_at && (
-                                <span className="flex items-center text-green-400">
-                                  <CheckCircle className="h-4 w-4 mr-1" />
-                                  Completed
-                                </span>
-                              )}
+                              <div className="flex items-center space-x-2">
+                                {course.group_link && (
+                                  <span className="flex items-center text-green-400 text-xs">
+                                    <Users className="h-3 w-3 mr-1" />
+                                    Group Available
+                                  </span>
+                                )}
+                                {course.completed_at && (
+                                  <span className="flex items-center text-green-400">
+                                    <CheckCircle className="h-4 w-4 mr-1" />
+                                    Completed
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           )}
 
@@ -4070,9 +5398,14 @@ const LearningManagementSystem = () => {
                               Created:{" "}
                               {new Date(course.created_at).toLocaleDateString()}
                             </span>
-                            <span className="text-purple-400 group-hover:text-purple-300 font-medium">
-                              View Details →
-                            </span>
+                            <div className="flex items-center space-x-2">
+                              {course.group_link && (
+                                <span className="text-green-400 text-xs">📱</span>
+                              )}
+                              <span className="text-purple-400 group-hover:text-purple-300 font-medium">
+                                View Details →
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -4097,8 +5430,9 @@ const LearningManagementSystem = () => {
                 </div>
               )}
             </div>
-          )}
-        </div>
+          )
+          }
+        </div >
         {showDeleteModal && receiptToDelete && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-slate-800/90 backdrop-blur-md rounded-2xl p-6 w-full max-w-md border border-white/20">
@@ -4160,14 +5494,16 @@ const LearningManagementSystem = () => {
           </div>
         )}
         {/* Mobile overlay */}
-        {sidebarOpen && (
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm lg:hidden z-20"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-      </div>
-    </div>
+        {
+          sidebarOpen && (
+            <div
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm lg:hidden z-20"
+              onClick={() => setSidebarOpen(false)}
+            />
+          )
+        }
+      </div >
+    </div >
   );
 };
 

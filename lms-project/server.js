@@ -12,6 +12,7 @@ const PDFDocument = require("pdfkit");
 const crypto = require("crypto");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require("dotenv").config();
+const { sendWelcomeEmail } = require('./emailService');
 
 const app = express();
 const server = http.createServer(app);
@@ -52,7 +53,7 @@ const upload = multer({ storage });
 const dbConfig = {
   host: "localhost",
   user: "root",
-  password: "Siddhesh@12",
+  password: "yashplw@9960",
   database: "lms_db",
 };
 
@@ -165,6 +166,8 @@ async function createTables() {
     title VARCHAR(255) NOT NULL,
     description TEXT,
     teacher_id INT NOT NULL,
+    duration_days INT DEFAULT 30,
+    group_link VARCHAR(500) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE
   )`);
@@ -260,6 +263,43 @@ async function createTables() {
     UNIQUE KEY unique_project (course_id, student_id)
   )`);
 
+  // Add this in the createTables() function after the existing table creation code
+
+  // Create assignments table
+  await db.query(`CREATE TABLE IF NOT EXISTS assignments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  assignment_file VARCHAR(255),
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  created_by INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+)`);
+
+  // Create assignment submissions table
+  await db.query(`CREATE TABLE IF NOT EXISTS assignment_submissions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  assignment_id INT NOT NULL,
+  student_id INT NOT NULL,
+  submission_link VARCHAR(500),
+  submission_file VARCHAR(255),
+  message TEXT,
+  status ENUM('submitted', 'approved', 'rejected') DEFAULT 'submitted',
+  teacher_feedback TEXT,
+  submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  verified_at TIMESTAMP NULL,
+  verified_by INT NULL,
+  FOREIGN KEY (assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE SET NULL,
+  UNIQUE KEY unique_submission (assignment_id, student_id)
+)`);
+
+  console.log("Assignment tables created successfully");
   // Add missing columns to projects table
   const projectColumns = [{ name: "verified_by", type: "INT NULL" }];
 
@@ -464,8 +504,23 @@ app.post("/api/register", async (req, res) => {
       [name, email, hashedPassword, role]
     );
 
+    // Send welcome email
+    const userData = {
+      name,
+      email,
+      role
+    };
+
+    try {
+      await sendWelcomeEmail(userData);
+      console.log(`Welcome email sent to new student: ${email}`);
+    } catch (emailError) {
+      console.error('Failed to send welcome email:', emailError);
+      // Don't fail the registration if email fails
+    }
+
     res.status(201).json({
-      message: "Student registered successfully",
+      message: "Student registered successfully! Check your email for login instructions.",
       userId: result.insertId,
     });
   } catch (error) {
@@ -839,8 +894,8 @@ app.put(
 async function generatePaymentReceipt(receiptData) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ 
-        size: "A4", 
+      const doc = new PDFDocument({
+        size: "A4",
         margin: 50,
         info: {
           Title: `Payment Receipt - ${receiptData.receiptNumber}`,
@@ -848,7 +903,7 @@ async function generatePaymentReceipt(receiptData) {
           Subject: 'Payment Receipt'
         }
       });
-      
+
       const stream = fs.createWriteStream(receiptData.filePath);
       doc.pipe(stream);
 
@@ -864,95 +919,95 @@ async function generatePaymentReceipt(receiptData) {
 
       // Header Section with Background (COLORED)
       doc.rect(0, 0, 595, 80).fill('#f0f0f0');
-      
+
       // Company/System Header (COLORED)
       doc.fillColor(darkGray)
-         .fontSize(28)
-         .font('Helvetica-Bold')
-         .text('LEARNING MANAGEMENT SYSTEM', 50, 25, { align: 'center' });
-      
+        .fontSize(28)
+        .font('Helvetica-Bold')
+        .text('LEARNING MANAGEMENT SYSTEM', 50, 25, { align: 'center' });
+
       doc.fillColor(darkGray)
-         .fontSize(12)
-         .font('Helvetica')
-         .text('Payment Receipt', 50, 55, { align: 'center' });
+        .fontSize(12)
+        .font('Helvetica')
+        .text('Payment Receipt', 50, 55, { align: 'center' });
 
       // Receipt Title (COLORED)
       doc.rect(0, 100, 595, 50).fill(darkGray);
       doc.fillColor('#ffffff')
-         .fontSize(24)
-         .font('Helvetica-Bold')
-         .text('PAYMENT RECEIPT', 50, 120, { align: 'center' });
+        .fontSize(24)
+        .font('Helvetica-Bold')
+        .text('PAYMENT RECEIPT', 50, 120, { align: 'center' });
 
       // ALL TEXT BELOW IS BLACK
       doc.fillColor(black);
 
       // Receipt Number and Date Section
       const receiptInfoY = 180;
-      
+
       // Left side - Receipt Number
       doc.fontSize(14)
-         .font('Helvetica-Bold')
-         .text('Receipt No:', 50, receiptInfoY);
+        .font('Helvetica-Bold')
+        .text('Receipt No:', 50, receiptInfoY);
       doc.fontSize(14)
-         .font('Helvetica')
-         .text(receiptData.receiptNumber, 140, receiptInfoY);
+        .font('Helvetica')
+        .text(receiptData.receiptNumber, 140, receiptInfoY);
 
       // Right side - Date
       doc.fontSize(14)
-         .font('Helvetica-Bold')
-         .text('Date:', 350, receiptInfoY);
+        .font('Helvetica-Bold')
+        .text('Date:', 350, receiptInfoY);
       doc.fontSize(14)
-         .font('Helvetica')
-         .text(new Date().toLocaleDateString('en-IN'), 390, receiptInfoY);
+        .font('Helvetica')
+        .text(new Date().toLocaleDateString('en-IN'), 390, receiptInfoY);
 
       // Horizontal line
       doc.strokeColor('#cccccc')
-         .lineWidth(1)
-         .moveTo(50, receiptInfoY + 25)
-         .lineTo(545, receiptInfoY + 25)
-         .stroke();
+        .lineWidth(1)
+        .moveTo(50, receiptInfoY + 25)
+        .lineTo(545, receiptInfoY + 25)
+        .stroke();
 
       // Student Details Section
       const studentY = 230;
       doc.rect(50, studentY, 495, 25).fill('#f8f8f8').stroke('#cccccc');
-      
-      doc.fillColor(black)
-         .fontSize(16)
-         .font('Helvetica-Bold')
-         .text('STUDENT DETAILS', 55, studentY + 7);
 
       doc.fillColor(black)
-         .fontSize(12)
-         .font('Helvetica-Bold')
-         .text('Name:', 55, studentY + 40);
+        .fontSize(16)
+        .font('Helvetica-Bold')
+        .text('STUDENT DETAILS', 55, studentY + 7);
+
+      doc.fillColor(black)
+        .fontSize(12)
+        .font('Helvetica-Bold')
+        .text('Name:', 55, studentY + 40);
       doc.fontSize(12)
-         .font('Helvetica')
-         .text(receiptData.studentName, 95, studentY + 40);
+        .font('Helvetica')
+        .text(receiptData.studentName, 95, studentY + 40);
 
       doc.fontSize(12)
-         .font('Helvetica-Bold')
-         .text('Course:', 55, studentY + 60);
+        .font('Helvetica-Bold')
+        .text('Course:', 55, studentY + 60);
       doc.fontSize(12)
-         .font('Helvetica')
-         .text(receiptData.courseTitle, 105, studentY + 60);
+        .font('Helvetica')
+        .text(receiptData.courseTitle, 105, studentY + 60);
 
       // Payment Details Section
       const paymentY = 330;
       doc.rect(50, paymentY, 495, 25).fill('#f8f8f8').stroke('#cccccc');
-      
+
       doc.fillColor(black)
-         .fontSize(16)
-         .font('Helvetica-Bold')
-         .text('PAYMENT DETAILS', 55, paymentY + 7);
+        .fontSize(16)
+        .font('Helvetica-Bold')
+        .text('PAYMENT DETAILS', 55, paymentY + 7);
 
       if (receiptData.description) {
         doc.fillColor(black)
-           .fontSize(12)
-           .font('Helvetica-Bold')
-           .text('Description:', 55, paymentY + 40);
+          .fontSize(12)
+          .font('Helvetica-Bold')
+          .text('Description:', 55, paymentY + 40);
         doc.fontSize(12)
-           .font('Helvetica')
-           .text(receiptData.description, 130, paymentY + 40);
+          .font('Helvetica')
+          .text(receiptData.description, 130, paymentY + 40);
       }
 
       // Payment Table
@@ -963,13 +1018,13 @@ async function generatePaymentReceipt(receiptData) {
         gstRate: 380,
         gstAmount: 480
       };
-      
+
       // Table Header - ONLY HEADERS HAVE BACKGROUND
       doc.rect(50, tableY, 495, 30).fill('#f0f0f0').stroke('#cccccc');
       doc.fillColor(black)
-         .fontSize(12)
-         .font('Helvetica-Bold');
-      
+        .fontSize(12)
+        .font('Helvetica-Bold');
+
       doc.text('ITEM', colPositions.item, tableY + 10);
       doc.text('AMOUNT', colPositions.amount, tableY + 10);
       doc.text('GST RATE', colPositions.gstRate, tableY + 10);
@@ -978,9 +1033,9 @@ async function generatePaymentReceipt(receiptData) {
       // Table Content - WHITE BACKGROUND, BLACK TEXT
       doc.rect(50, tableY + 30, 495, 30).fill('#ffffff').stroke('#cccccc');
       doc.fillColor(black)
-         .fontSize(11)
-         .font('Helvetica');
-      
+        .fontSize(11)
+        .font('Helvetica');
+
       doc.text('Course Fee', colPositions.item, tableY + 42);
       doc.text(formatCurrency(receiptData.amount), colPositions.amount, tableY + 42);
       doc.text(`${receiptData.gstRate}%`, colPositions.gstRate, tableY + 42);
@@ -990,11 +1045,11 @@ async function generatePaymentReceipt(receiptData) {
       const totalY = tableY + 80;
       const labelX = 350;
       const valueX = 480;
-      
+
       // Subtotal
       doc.fontSize(12)
-         .font('Helvetica-Bold')
-         .fillColor(black);
+        .font('Helvetica-Bold')
+        .fillColor(black);
       doc.text('Subtotal:', labelX, totalY);
       doc.text(formatCurrency(receiptData.amount), valueX, totalY);
 
@@ -1004,62 +1059,62 @@ async function generatePaymentReceipt(receiptData) {
 
       // Horizontal line before total
       doc.strokeColor('#cccccc')
-         .lineWidth(1)
-         .moveTo(labelX, totalY + 40)
-         .lineTo(545, totalY + 40)
-         .stroke();
+        .lineWidth(1)
+        .moveTo(labelX, totalY + 40)
+        .lineTo(545, totalY + 40)
+        .stroke();
 
       // Total Amount - WHITE BACKGROUND WITH BLACK BORDER
       doc.rect(340, totalY + 45, 205, 35).fill('#ffffff').stroke('#000000', 2);
       doc.fillColor(black)
-         .fontSize(14)
-         .font('Helvetica-Bold');
+        .fontSize(14)
+        .font('Helvetica-Bold');
       doc.text('TOTAL AMOUNT:', labelX, totalY + 57);
       doc.fontSize(16)
-         .font('Helvetica-Bold')
-         .text(formatCurrency(receiptData.totalAmount), valueX, totalY + 57);
+        .font('Helvetica-Bold')
+        .text(formatCurrency(receiptData.totalAmount), valueX, totalY + 57);
 
       // Amount in Words
       const amountInWords = numberToWords(receiptData.totalAmount);
       doc.fillColor(black)
-         .fontSize(11)
-         .font('Helvetica-Bold')
-         .text('Amount in Words:', 50, totalY + 100);
+        .fontSize(11)
+        .font('Helvetica-Bold')
+        .text('Amount in Words:', 50, totalY + 100);
       doc.fontSize(11)
-         .font('Helvetica')
-         .text(`${amountInWords} Only`, 50, totalY + 115, { width: 495 });
+        .font('Helvetica')
+        .text(`${amountInWords} Only`, 50, totalY + 115, { width: 495 });
 
       // Payment Method
       doc.fontSize(10)
-         .font('Helvetica')
-         .fillColor(black)
-         .text('Payment Method: Online/Cash', 50, totalY + 140);
+        .font('Helvetica')
+        .fillColor(black)
+        .text('Payment Method: Online/Cash', 50, totalY + 140);
 
       // Footer Section
       const footerY = 680;
-      
+
       // Horizontal line above footer
       doc.strokeColor('#cccccc')
-         .lineWidth(1)
-         .moveTo(50, footerY)
-         .lineTo(545, footerY)
-         .stroke();
+        .lineWidth(1)
+        .moveTo(50, footerY)
+        .lineTo(545, footerY)
+        .stroke();
 
       // Terms and Conditions
       doc.fontSize(8)
-         .fillColor(black)
-         .font('Helvetica-Bold')
-         .text('Terms & Conditions:', 50, footerY + 10);
+        .fillColor(black)
+        .font('Helvetica-Bold')
+        .text('Terms & Conditions:', 50, footerY + 10);
       doc.font('Helvetica')
-         .text('• This receipt is computer generated and does not require signature.', 50, footerY + 22);
+        .text('• This receipt is computer generated and does not require signature.', 50, footerY + 22);
       doc.text('• Please retain this receipt for your records.', 50, footerY + 32);
       doc.text('• For any queries, please contact the administration.', 50, footerY + 42);
 
       // System signature
       doc.fontSize(9)
-         .fillColor(black)
-         .font('Helvetica')
-         .text('Generated by Learning Management System', 50, footerY + 65, { align: 'center', width: 495 });
+        .fillColor(black)
+        .font('Helvetica')
+        .text('Generated by Learning Management System', 50, footerY + 65, { align: 'center', width: 495 });
       doc.text(`Generated on: ${new Date().toLocaleString('en-IN')}`, 50, footerY + 77, { align: 'center', width: 495 });
 
       doc.end();
@@ -1099,7 +1154,7 @@ function numberToWords(amount) {
   if (paise > 0) {
     result += ' and ' + convertToWords(paise) + ' Paise';
   }
-  
+
   return result;
 }
 // Delete receipt route
@@ -1165,6 +1220,414 @@ app.get(
     }
   }
 );
+
+// Assignment Management Routes
+
+// Create assignment (Teacher)
+// Create assignment (Teacher) - Fixed
+app.post(
+  "/api/courses/:courseId/assignments",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  upload.single("assignmentFile"),
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+      const { title, description, startDate, endDate } = req.body;
+      const assignmentFile = req.file ? req.file.filename : null;
+
+      if (!title || !startDate || !endDate) {
+        return res.status(400).json({ message: "Title, start date, and end date are required" });
+      }
+
+      // Validate dates
+      if (new Date(startDate) >= new Date(endDate)) {
+        return res.status(400).json({ message: "End date must be after start date" });
+      }
+
+      const [courseCheck] = await db.execute(
+        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
+        [courseId, req.user.userId]
+      );
+
+      if (courseCheck.length === 0) {
+        return res.status(404).json({ message: "Course not found or not authorized" });
+      }
+
+      // Clean description - convert empty string to null
+      const cleanDescription = description && description.trim() ? description.trim() : null;
+
+      const [result] = await db.execute(
+        "INSERT INTO assignments (course_id, title, description, assignment_file, start_date, end_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [courseId, title, cleanDescription, assignmentFile, startDate, endDate, req.user.userId]
+      );
+
+      res.status(201).json({
+        message: "Assignment created successfully",
+        assignmentId: result.insertId,
+      });
+    } catch (error) {
+      console.error("Assignment creation error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get assignments for a course
+app.get(
+  "/api/courses/:courseId/assignments",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      // Check access
+      let accessQuery;
+      let accessParams;
+
+      if (req.user.role === "teacher") {
+        accessQuery = "SELECT id FROM courses WHERE id = ? AND teacher_id = ?";
+        accessParams = [courseId, req.user.userId];
+      } else if (req.user.role === "student") {
+        accessQuery = "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?";
+        accessParams = [courseId, req.user.userId];
+      } else {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const [accessCheck] = await db.execute(accessQuery, accessParams);
+      if (accessCheck.length === 0) {
+        return res.status(403).json({ message: "Not authorized to view assignments" });
+      }
+
+      let query = `
+        SELECT a.*, u.name as created_by_name
+        FROM assignments a
+        JOIN users u ON a.created_by = u.id
+        WHERE a.course_id = ?
+      `;
+
+      if (req.user.role === "student") {
+        query += `
+          ORDER BY a.end_date ASC
+        `;
+      } else {
+        query += `
+          ORDER BY a.created_at DESC
+        `;
+      }
+
+      const [assignments] = await db.execute(query, [courseId]);
+
+      // For students, add submission status
+      if (req.user.role === "student") {
+        for (let assignment of assignments) {
+          const [submission] = await db.execute(
+            "SELECT * FROM assignment_submissions WHERE assignment_id = ? AND student_id = ?",
+            [assignment.id, req.user.userId]
+          );
+
+          assignment.submission = submission[0] || null;
+          assignment.is_overdue = new Date() > new Date(assignment.end_date);
+          assignment.can_submit = true; // Always allow submission now
+
+          // Add status for after due date submissions
+          if (assignment.submission) {
+            const submissionDate = new Date(assignment.submission.submitted_at);
+            const dueDate = new Date(assignment.end_date);
+            assignment.submission.is_after_due_date = submissionDate > dueDate;
+          }
+        }
+      }
+
+      // For teachers, add submission count
+      if (req.user.role === "teacher") {
+        for (let assignment of assignments) {
+          const [submissionCount] = await db.execute(
+            "SELECT COUNT(*) as count FROM assignment_submissions WHERE assignment_id = ?",
+            [assignment.id]
+          );
+          assignment.submission_count = submissionCount[0].count;
+        }
+      }
+
+      res.json(assignments);
+    } catch (error) {
+      console.error("Get assignments error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Submit assignment (Student)
+// Submit assignment (Student) - Updated
+// Submit assignment (Student) - Fixed
+app.post(
+  "/api/assignments/:assignmentId/submit",
+  authenticateToken,
+  requireRole(["student"]),
+  checkUserStatus,
+  upload.single("submissionFile"),
+  async (req, res) => {
+    try {
+      const { assignmentId } = req.params;
+      const { submissionLink, message } = req.body;
+      const submissionFile = req.file ? req.file.filename : null;
+
+      // Convert empty strings and undefined to null
+      const cleanSubmissionLink = submissionLink && submissionLink.trim() ? submissionLink.trim() : null;
+      const cleanMessage = message && message.trim() ? message.trim() : null;
+
+      // Check if at least one field is provided
+      if (!cleanSubmissionLink && !submissionFile && !cleanMessage) {
+        return res.status(400).json({ message: "At least one of submission link, file, or message is required" });
+      }
+
+      // Check if assignment exists and student is enrolled
+      const [assignmentCheck] = await db.execute(
+        `SELECT a.*, ce.id as enrollment_id 
+         FROM assignments a
+         JOIN course_enrollments ce ON a.course_id = ce.course_id
+         WHERE a.id = ? AND ce.student_id = ?`,
+        [assignmentId, req.user.userId]
+      );
+
+      if (assignmentCheck.length === 0) {
+        return res.status(404).json({ message: "Assignment not found or not enrolled" });
+      }
+
+      const assignment = assignmentCheck[0];
+      const isAfterDueDate = new Date() > new Date(assignment.end_date);
+
+      // Use explicit null values for database insertion
+      await db.execute(
+        `INSERT INTO assignment_submissions (assignment_id, student_id, submission_link, submission_file, message, status)
+         VALUES (?, ?, ?, ?, ?, 'submitted')
+         ON DUPLICATE KEY UPDATE 
+           submission_link = VALUES(submission_link),
+           submission_file = VALUES(submission_file),
+           message = VALUES(message),
+           status = 'submitted',
+           submitted_at = NOW(),
+           verified_at = NULL,
+           verified_by = NULL,
+           teacher_feedback = NULL`,
+        [
+          assignmentId,
+          req.user.userId,
+          cleanSubmissionLink,
+          submissionFile,
+          cleanMessage
+        ]
+      );
+
+      const statusMessage = isAfterDueDate
+        ? "Assignment submitted successfully (submitted after due date)"
+        : "Assignment submitted successfully";
+
+      res.json({
+        message: statusMessage,
+        isAfterDueDate: isAfterDueDate
+      });
+    } catch (error) {
+      console.error("Assignment submission error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get assignment submissions (Teacher)
+// Get assignment submissions (Teacher) - Updated
+app.get(
+  "/api/assignments/:assignmentId/submissions",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { assignmentId } = req.params;
+
+      // Check if teacher owns the assignment
+      const [assignmentCheck] = await db.execute(
+        `SELECT a.*, c.teacher_id 
+         FROM assignments a
+         JOIN courses c ON a.course_id = c.id
+         WHERE a.id = ? AND c.teacher_id = ?`,
+        [assignmentId, req.user.userId]
+      );
+
+      if (assignmentCheck.length === 0) {
+        return res.status(404).json({ message: "Assignment not found or not authorized" });
+      }
+
+      const assignment = assignmentCheck[0];
+
+      const [submissions] = await db.execute(
+        `SELECT ass.*, u.name as student_name, u.email as student_email,
+                v.name as verified_by_name
+         FROM assignment_submissions ass
+         JOIN users u ON ass.student_id = u.id
+         LEFT JOIN users v ON ass.verified_by = v.id
+         WHERE ass.assignment_id = ?
+         ORDER BY ass.submitted_at DESC`,
+        [assignmentId]
+      );
+
+      // Add due date comparison for each submission
+      const submissionsWithStatus = submissions.map(submission => {
+        const submissionDate = new Date(submission.submitted_at);
+        const dueDate = new Date(assignment.end_date);
+        
+        return {
+          ...submission,
+          is_after_due_date: submissionDate > dueDate,
+          assignment_end_date: assignment.end_date
+        };
+      });
+
+      res.json(submissionsWithStatus);
+    } catch (error) {
+      console.error("Get submissions error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Verify assignment submission (Teacher)
+app.put(
+  "/api/assignment-submissions/:submissionId/verify",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { submissionId } = req.params;
+      const { status, feedback } = req.body;
+
+      if (!["approved", "rejected"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+
+      // Check if teacher owns the assignment
+      const [submissionCheck] = await db.execute(
+        `SELECT ass.*, a.course_id, c.teacher_id 
+         FROM assignment_submissions ass
+         JOIN assignments a ON ass.assignment_id = a.id
+         JOIN courses c ON a.course_id = c.id
+         WHERE ass.id = ? AND c.teacher_id = ?`,
+        [submissionId, req.user.userId]
+      );
+
+      if (submissionCheck.length === 0) {
+        return res.status(404).json({ message: "Submission not found or not authorized" });
+      }
+
+      await db.execute(
+        "UPDATE assignment_submissions SET status = ?, teacher_feedback = ?, verified_at = NOW(), verified_by = ? WHERE id = ?",
+        [status, feedback, req.user.userId, submissionId]
+      );
+
+      res.json({ message: `Assignment ${status} successfully` });
+    } catch (error) {
+      console.error("Verify assignment error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Edit assignment (Teacher)
+// Edit assignment (Teacher) - Fixed
+app.put(
+  "/api/assignments/:assignmentId",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  upload.single("assignmentFile"),
+  async (req, res) => {
+    try {
+      const { assignmentId } = req.params;
+      const { title, description, startDate, endDate } = req.body;
+      const assignmentFile = req.file ? req.file.filename : null;
+
+      if (!title || !startDate || !endDate) {
+        return res.status(400).json({ message: "Title, start date, and end date are required" });
+      }
+
+      // Validate dates
+      if (new Date(startDate) >= new Date(endDate)) {
+        return res.status(400).json({ message: "End date must be after start date" });
+      }
+
+      // Check if teacher owns the assignment
+      const [assignmentCheck] = await db.execute(
+        `SELECT a.*, c.teacher_id 
+         FROM assignments a
+         JOIN courses c ON a.course_id = c.id
+         WHERE a.id = ? AND c.teacher_id = ?`,
+        [assignmentId, req.user.userId]
+      );
+
+      if (assignmentCheck.length === 0) {
+        return res.status(404).json({ message: "Assignment not found or not authorized" });
+      }
+
+      // Clean description - convert empty string to null
+      const cleanDescription = description && description.trim() ? description.trim() : null;
+
+      let updateQuery = "UPDATE assignments SET title = ?, description = ?, start_date = ?, end_date = ?";
+      let params = [title, cleanDescription, startDate, endDate];
+
+      if (assignmentFile) {
+        updateQuery += ", assignment_file = ?";
+        params.push(assignmentFile);
+      }
+
+      updateQuery += " WHERE id = ?";
+      params.push(assignmentId);
+
+      await db.execute(updateQuery, params);
+
+      res.json({ message: "Assignment updated successfully" });
+    } catch (error) {
+      console.error("Update assignment error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Delete assignment (Teacher)
+app.delete(
+  "/api/assignments/:assignmentId",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { assignmentId } = req.params;
+
+      const [assignmentCheck] = await db.execute(
+        `SELECT a.*, c.teacher_id 
+         FROM assignments a
+         JOIN courses c ON a.course_id = c.id
+         WHERE a.id = ? AND c.teacher_id = ?`,
+        [assignmentId, req.user.userId]
+      );
+
+      if (assignmentCheck.length === 0) {
+        return res.status(404).json({ message: "Assignment not found or not authorized" });
+      }
+
+      await db.execute("DELETE FROM assignments WHERE id = ?", [assignmentId]);
+
+      res.json({ message: "Assignment deleted successfully" });
+    } catch (error) {
+      console.error("Delete assignment error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
 // Admin Routes
 app.post(
   "/api/admin/create-teacher",
@@ -1202,13 +1665,32 @@ app.post(
         [result.insertId, tempPassword]
       );
 
+      // Send welcome email with credentials
+      const userData = {
+        name,
+        email,
+        role: 'teacher'
+      };
+
+      try {
+        const emailResult = await sendWelcomeEmail(userData, tempPassword);
+        if (emailResult.success) {
+          console.log(`Credentials email sent to new teacher: ${email}`);
+        } else {
+          console.error('Failed to send credentials email:', emailResult.error);
+        }
+      } catch (emailError) {
+        console.error('Email sending error:', emailError);
+      }
+
       res.status(201).json({
-        message: "Teacher created successfully",
+        message: "Teacher created successfully! Login credentials have been sent to their email.",
         teacherId: result.insertId,
         credentials: {
           email: email,
           password: tempPassword,
         },
+        emailSent: true
       });
     } catch (error) {
       console.error("Create teacher error:", error);
@@ -1266,9 +1748,8 @@ app.put(
       ]);
 
       res.json({
-        message: `Teacher ${
-          newStatus === "active" ? "unblocked" : "blocked"
-        } successfully`,
+        message: `Teacher ${newStatus === "active" ? "unblocked" : "blocked"
+          } successfully`,
         newStatus,
       });
     } catch (error) {
@@ -1316,16 +1797,139 @@ app.post(
         [result.insertId, tempPassword]
       );
 
+      // Send welcome email with credentials
+      const userData = {
+        name,
+        email,
+        role: 'student'
+      };
+
+      try {
+        const emailResult = await sendWelcomeEmail(userData, tempPassword);
+        if (emailResult.success) {
+          console.log(`Credentials email sent to new student: ${email}`);
+        } else {
+          console.error('Failed to send credentials email:', emailResult.error);
+        }
+      } catch (emailError) {
+        console.error('Email sending error:', emailError);
+      }
+
       res.status(201).json({
-        message: "Student created successfully",
+        message: "Student created successfully! Login credentials have been sent to their email.",
         studentId: result.insertId,
         credentials: {
           email: email,
           password: tempPassword,
         },
+        emailSent: true
       });
     } catch (error) {
       console.error("Create student error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+app.post(
+  "/api/resend-credentials",
+  authenticateToken,
+  requireRole(["admin", "teacher"]),
+  async (req, res) => {
+    try {
+      const { userId } = req.body;
+
+      // Get user details
+      const [user] = await db.execute(
+        "SELECT u.*, uc.temp_password FROM users u LEFT JOIN user_credentials uc ON u.id = uc.user_id WHERE u.id = ?",
+        [userId]
+      );
+
+      if (user.length === 0) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const userData = user[0];
+
+      // Check authorization
+      if (req.user.role === "teacher" && userData.role !== "student") {
+        return res.status(403).json({ message: "Teachers can only resend student credentials" });
+      }
+
+      // Only resend if user hasn't changed password
+      const [credentials] = await db.execute(
+        "SELECT temp_password, is_password_changed FROM user_credentials WHERE user_id = ?",
+        [userId]
+      );
+
+      if (credentials.length === 0 || credentials[0].is_password_changed) {
+        return res.status(400).json({
+          message: "User has already changed their password. Cannot resend credentials."
+        });
+      }
+
+      // Send email
+      const emailData = {
+        name: userData.name,
+        email: userData.email,
+        role: userData.role
+      };
+
+      const emailResult = await sendWelcomeEmail(emailData, credentials[0].temp_password);
+
+      if (emailResult.success) {
+        res.json({
+          message: "Credentials email resent successfully!",
+          emailSent: true
+        });
+      } else {
+        res.status(500).json({
+          message: "Failed to send email",
+          error: emailResult.error
+        });
+      }
+
+    } catch (error) {
+      console.error("Resend credentials error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Optional: Route to test email configuration
+app.post(
+  "/api/test-email",
+  authenticateToken,
+  requireRole(["admin"]),
+  async (req, res) => {
+    try {
+      const { testEmail } = req.body;
+
+      if (!testEmail) {
+        return res.status(400).json({ message: "Test email address is required" });
+      }
+
+      const testData = {
+        name: "Test User",
+        email: testEmail,
+        role: "student"
+      };
+
+      const emailResult = await sendWelcomeEmail(testData, "TEST123");
+
+      if (emailResult.success) {
+        res.json({
+          message: "Test email sent successfully!",
+          messageId: emailResult.messageId
+        });
+      } else {
+        res.status(500).json({
+          message: "Failed to send test email",
+          error: emailResult.error
+        });
+      }
+
+    } catch (error) {
+      console.error("Test email error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -1389,7 +1993,6 @@ app.delete(
   }
 );
 
-// Course Routes
 app.post(
   "/api/courses",
   authenticateToken,
@@ -1397,11 +2000,16 @@ app.post(
   checkUserStatus,
   async (req, res) => {
     try {
-      const { title, description, duration_days } = req.body;
+      const { title, description, duration_days, group_link } = req.body;
+
+      // Validate group_link if provided
+      if (group_link && !isValidUrl(group_link)) {
+        return res.status(400).json({ message: "Invalid group link URL" });
+      }
 
       const [result] = await db.execute(
-        "INSERT INTO courses (title, description, teacher_id, duration_days) VALUES (?, ?, ?, ?)",
-        [title, description, req.user.userId, duration_days || 30]
+        "INSERT INTO courses (title, description, teacher_id, duration_days, group_link) VALUES (?, ?, ?, ?, ?)",
+        [title, description, req.user.userId, duration_days || 30, group_link || null]
       );
 
       res.status(201).json({
@@ -1466,7 +2074,7 @@ app.put(
   async (req, res) => {
     try {
       const { courseId } = req.params;
-      const { title, description, duration_days } = req.body;
+      const { title, description, duration_days, group_link } = req.body;
 
       const [courseCheck] = await db.execute(
         "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
@@ -1479,9 +2087,14 @@ app.put(
           .json({ message: "Course not found or not authorized" });
       }
 
+      // Validate group_link if provided
+      if (group_link && !isValidUrl(group_link)) {
+        return res.status(400).json({ message: "Invalid group link URL" });
+      }
+
       await db.execute(
-        "UPDATE courses SET title = ?, description = ?, duration_days = ? WHERE id = ?",
-        [title, description, duration_days, courseId]
+        "UPDATE courses SET title = ?, description = ?, duration_days = ?, group_link = ? WHERE id = ?",
+        [title, description, duration_days, group_link || null, courseId]
       );
 
       res.json({ message: "Course updated successfully" });
@@ -1491,6 +2104,147 @@ app.put(
     }
   }
 );
+
+// Add group link management route for teachers
+app.put(
+  "/api/courses/:courseId/group-link",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+      const { group_link } = req.body;
+
+      const [courseCheck] = await db.execute(
+        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
+        [courseId, req.user.userId]
+      );
+
+      if (courseCheck.length === 0) {
+        return res
+          .status(404)
+          .json({ message: "Course not found or not authorized" });
+      }
+
+      // Validate group_link if provided
+      if (group_link && !isValidUrl(group_link)) {
+        return res.status(400).json({ message: "Invalid group link URL" });
+      }
+
+      await db.execute(
+        "UPDATE courses SET group_link = ? WHERE id = ?",
+        [group_link || null, courseId]
+      );
+
+      res.json({
+        message: group_link ? "Group link updated successfully" : "Group link removed successfully",
+        group_link: group_link || null
+      });
+    } catch (error) {
+      console.error("Update group link error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get course group link for students
+app.get(
+  "/api/courses/:courseId/group-link",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      // Check if user is enrolled in the course (for students) or owns the course (for teachers)
+      let query;
+      let params;
+
+      if (req.user.role === 'teacher') {
+        query = "SELECT group_link FROM courses WHERE id = ? AND teacher_id = ?";
+        params = [courseId, req.user.userId];
+      } else if (req.user.role === 'student') {
+        query = `
+          SELECT c.group_link 
+          FROM courses c 
+          JOIN course_enrollments ce ON c.id = ce.course_id 
+          WHERE c.id = ? AND ce.student_id = ?
+        `;
+        params = [courseId, req.user.userId];
+      } else {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const [result] = await db.execute(query, params);
+
+      if (result.length === 0) {
+        return res.status(404).json({
+          message: req.user.role === 'student'
+            ? "Course not found or you are not enrolled"
+            : "Course not found or not authorized"
+        });
+      }
+
+      res.json({
+        group_link: result[0].group_link,
+        has_group_link: !!result[0].group_link
+      });
+    } catch (error) {
+      console.error("Get group link error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Track group join activity (optional analytics)
+app.post(
+  "/api/courses/:courseId/group-join",
+  authenticateToken,
+  requireRole(["student"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      // Verify student is enrolled
+      const [enrollmentCheck] = await db.execute(
+        "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+        [courseId, req.user.userId]
+      );
+
+      if (enrollmentCheck.length === 0) {
+        return res.status(403).json({ message: "Not enrolled in this course" });
+      }
+
+      // Log the group join activity (optional - create this table if you want analytics)
+      try {
+        await db.execute(
+          "INSERT INTO group_join_logs (course_id, student_id, joined_at) VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE joined_at = NOW()",
+          [courseId, req.user.userId]
+        );
+      } catch (logError) {
+        // Ignore logging errors - this is optional
+        console.log('Group join logging failed (optional feature):', logError.message);
+      }
+
+      res.json({ message: "Group join activity recorded" });
+    } catch (error) {
+      console.error("Group join tracking error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Helper function to validate URLs
+function isValidUrl(string) {
+  try {
+    const url = new URL(string);
+    return ['http:', 'https:'].includes(url.protocol);
+  } catch (_) {
+    return false;
+  }
+}
 
 app.delete(
   "/api/courses/:courseId",
@@ -2459,29 +3213,51 @@ app.get(
         );
         const [studentCount] = await db.execute(
           `
-        SELECT COUNT(DISTINCT ce.student_id) as count 
-        FROM course_enrollments ce 
-        JOIN courses c ON ce.course_id = c.id 
-        WHERE c.teacher_id = ?
-      `,
+    SELECT COUNT(DISTINCT ce.student_id) as count 
+    FROM course_enrollments ce 
+    JOIN courses c ON ce.course_id = c.id 
+    WHERE c.teacher_id = ?
+  `,
           [req.user.userId]
         );
         const [sessionCount] = await db.execute(
           `
-        SELECT COUNT(*) as count 
-        FROM daily_sessions ds 
-        JOIN courses c ON ds.course_id = c.id 
-        WHERE c.teacher_id = ?
-      `,
+    SELECT COUNT(*) as count 
+    FROM daily_sessions ds 
+    JOIN courses c ON ds.course_id = c.id 
+    WHERE c.teacher_id = ?
+  `,
           [req.user.userId]
         );
         const [projectCount] = await db.execute(
           `
-        SELECT COUNT(*) as count 
-        FROM projects p 
-        JOIN courses c ON p.course_id = c.id 
-        WHERE c.teacher_id = ? AND p.status = 'submitted'
-      `,
+    SELECT COUNT(*) as count 
+    FROM projects p 
+    JOIN courses c ON p.course_id = c.id 
+    WHERE c.teacher_id = ? AND p.status = 'submitted'
+  `,
+          [req.user.userId]
+        );
+
+        // Add assignment stats
+        const [assignmentCount] = await db.execute(
+          `
+    SELECT COUNT(*) as count 
+    FROM assignments a 
+    JOIN courses c ON a.course_id = c.id 
+    WHERE c.teacher_id = ?
+  `,
+          [req.user.userId]
+        );
+
+        const [pendingAssignmentCount] = await db.execute(
+          `
+    SELECT COUNT(*) as count 
+    FROM assignment_submissions asub
+    JOIN assignments a ON asub.assignment_id = a.id
+    JOIN courses c ON a.course_id = c.id 
+    WHERE c.teacher_id = ? AND asub.status = 'submitted'
+  `,
           [req.user.userId]
         );
 
@@ -2490,6 +3266,8 @@ app.get(
           students: studentCount[0].count,
           sessions: sessionCount[0].count,
           pendingProjects: projectCount[0].count,
+          assignments: assignmentCount[0].count,
+          pendingAssignments: pendingAssignmentCount[0].count,
         };
       } else if (req.user.role === "student") {
         const [enrolledCount] = await db.execute(
