@@ -317,6 +317,18 @@ async function createTables() {
   UNIQUE KEY unique_course_teacher (course_id, teacher_id)
 )`);
 
+  await db.query(`CREATE TABLE IF NOT EXISTS blogs (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  content TEXT NOT NULL,
+  image_url VARCHAR(500) NULL,
+  video_url VARCHAR(500) NULL,
+  author_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+)`);
+  console.log("Blog table created successfully");
 
   console.log("Assignment tables created successfully");
   // Add missing columns to projects table
@@ -2850,6 +2862,213 @@ app.get(
       res.json(attendance);
     } catch (error) {
       console.error("Get attendance error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Blog Management Routes
+
+// Create blog (Admin/Teacher only)
+app.post(
+  "/api/blogs",
+  authenticateToken,
+  requireRole(["admin", "teacher"]),
+  checkUserStatus,
+  upload.single("blogImage"),
+  async (req, res) => {
+    try {
+      const { title, content, videoUrl } = req.body;
+      const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+
+      if (!title || !content) {
+        return res.status(400).json({ message: "Title and content are required" });
+      }
+
+      // Validate video URL if provided
+      if (videoUrl && !isValidUrl(videoUrl)) {
+        return res.status(400).json({ message: "Invalid video URL" });
+      }
+
+      const [result] = await db.execute(
+        "INSERT INTO blogs (title, content, image_url, video_url, author_id) VALUES (?, ?, ?, ?, ?)",
+        [title, content, imageUrl, videoUrl || null, req.user.userId]
+      );
+
+      res.status(201).json({
+        message: "Blog post created successfully",
+        blogId: result.insertId,
+      });
+    } catch (error) {
+      console.error("Blog creation error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get all blogs (All users can view)
+app.get(
+  "/api/blogs",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { page = 1, limit = 10 } = req.query;
+      
+      // Convert to integers and validate
+      const pageNum = Math.max(1, parseInt(page, 10)) || 1;
+      const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10))) || 10;
+      const offset = (pageNum - 1) * limitNum;
+
+      // Use query instead of execute for this specific case
+      const [blogs] = await db.query(
+        `SELECT b.*, u.name as author_name, u.role as author_role
+         FROM blogs b
+         JOIN users u ON b.author_id = u.id
+         ORDER BY b.created_at DESC
+         LIMIT ${limitNum} OFFSET ${offset}`
+      );
+
+      const [totalCount] = await db.execute(
+        "SELECT COUNT(*) as count FROM blogs"
+      );
+
+      res.json({
+        blogs,
+        totalCount: totalCount[0].count,
+        currentPage: pageNum,
+        totalPages: Math.ceil(totalCount[0].count / limitNum)
+      });
+    } catch (error) {
+      console.error("Get blogs error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get single blog
+app.get(
+  "/api/blogs/:blogId",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { blogId } = req.params;
+
+      const [blog] = await db.execute(
+        `SELECT b.*, u.name as author_name, u.role as author_role
+         FROM blogs b
+         JOIN users u ON b.author_id = u.id
+         WHERE b.id = ?`,
+        [blogId]
+      );
+
+      if (blog.length === 0) {
+        return res.status(404).json({ message: "Blog post not found" });
+      }
+
+      res.json(blog[0]);
+    } catch (error) {
+      console.error("Get blog error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Update blog (Only author can update)
+app.put(
+  "/api/blogs/:blogId",
+  authenticateToken,
+  requireRole(["admin", "teacher"]),
+  checkUserStatus,
+  upload.single("blogImage"),
+  async (req, res) => {
+    try {
+      const { blogId } = req.params;
+      const { title, content, videoUrl } = req.body;
+      const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+
+      if (!title || !content) {
+        return res.status(400).json({ message: "Title and content are required" });
+      }
+
+      // Check if user owns the blog or is admin
+      const [blogCheck] = await db.execute(
+        "SELECT author_id FROM blogs WHERE id = ?",
+        [blogId]
+      );
+
+      if (blogCheck.length === 0) {
+        return res.status(404).json({ message: "Blog post not found" });
+      }
+
+      if (blogCheck[0].author_id !== req.user.userId && req.user.role !== "admin") {
+        return res.status(403).json({ message: "Not authorized to update this blog" });
+      }
+
+      // Validate video URL if provided
+      if (videoUrl && !isValidUrl(videoUrl)) {
+        return res.status(400).json({ message: "Invalid video URL" });
+      }
+
+      let updateQuery = "UPDATE blogs SET title = ?, content = ?, video_url = ?";
+      let params = [title, content, videoUrl || null];
+
+      if (imageUrl) {
+        updateQuery += ", image_url = ?";
+        params.push(imageUrl);
+      }
+
+      updateQuery += " WHERE id = ?";
+      params.push(blogId);
+
+      await db.execute(updateQuery, params);
+
+      res.json({ message: "Blog post updated successfully" });
+    } catch (error) {
+      console.error("Update blog error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Delete blog (Only author or admin can delete)
+app.delete(
+  "/api/blogs/:blogId",
+  authenticateToken,
+  requireRole(["admin", "teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { blogId } = req.params;
+
+      // Check if user owns the blog or is admin
+      const [blogCheck] = await db.execute(
+        "SELECT author_id, image_url FROM blogs WHERE id = ?",
+        [blogId]
+      );
+
+      if (blogCheck.length === 0) {
+        return res.status(404).json({ message: "Blog post not found" });
+      }
+
+      if (blogCheck[0].author_id !== req.user.userId && req.user.role !== "admin") {
+        return res.status(403).json({ message: "Not authorized to delete this blog" });
+      }
+
+      // Delete the image file if exists
+      if (blogCheck[0].image_url) {
+        const imagePath = path.join("uploads", path.basename(blogCheck[0].image_url));
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath);
+        }
+      }
+
+      await db.execute("DELETE FROM blogs WHERE id = ?", [blogId]);
+
+      res.json({ message: "Blog post deleted successfully" });
+    } catch (error) {
+      console.error("Delete blog error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   }

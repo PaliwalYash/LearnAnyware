@@ -217,6 +217,176 @@ const StudentSearchInput = ({ value, onChange, onSelect, placeholder, courseId }
   );
 };
 
+// Blog Post Card Component with Read More/Less functionality
+const BlogPostCard = ({ blog, user, isLongContent, onEdit, onDelete }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const contentLimit = 500;
+
+  const displayContent = isExpanded || !isLongContent
+    ? blog.content
+    : blog.content.substring(0, contentLimit) + '...';
+
+  return (
+    <article className="bg-slate-800/50 backdrop-blur-md rounded-2xl border border-white/10 shadow-lg hover:shadow-xl transition-all duration-300 hover:border-purple-500/30 group">
+      {/* Blog Header */}
+      <div className="p-6 pb-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
+          <div className="flex-1 min-w-0">
+            <h3 className="text-xl font-semibold text-white mb-3 group-hover:text-purple-300 transition-colors">
+              {blog.title}
+            </h3>
+            <div className="flex flex-wrap items-center gap-3 text-sm text-gray-400">
+              <div className="flex items-center">
+                <User className="h-4 w-4 mr-1" />
+                <span className="font-medium">{blog.author_name}</span>
+              </div>
+              <span className={`px-2 py-1 rounded-full text-xs font-medium ${blog.author_role === "admin"
+                ? "bg-red-500/20 text-red-300 border border-red-500/30"
+                : "bg-blue-500/20 text-blue-300 border border-blue-500/30"
+                }`}>
+                {blog.author_role.charAt(0).toUpperCase() + blog.author_role.slice(1)}
+              </span>
+              <div className="flex items-center">
+                <Calendar className="h-4 w-4 mr-1" />
+                <span>{new Date(blog.created_at).toLocaleDateString('en-US', {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric'
+                })}</span>
+              </div>
+              <div className="flex items-center">
+                <Clock className="h-4 w-4 mr-1" />
+                <span>{new Date(blog.created_at).toLocaleTimeString('en-US', {
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}</span>
+              </div>
+            </div>
+          </div>
+
+          {(user.role === "admin" || blog.author_id === user.id) && (
+            <div className="flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={() => onEdit(blog)}
+                className="bg-blue-600/80 text-white px-3 py-2 rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center backdrop-blur-sm"
+                title="Edit blog post"
+              >
+                <Edit className="h-3 w-3 mr-1" />
+                Edit
+              </button>
+              <button
+                onClick={() => onDelete(blog.id)}
+                className="bg-red-600/80 text-white px-3 py-2 rounded-lg text-sm hover:bg-red-700 transition-colors flex items-center backdrop-blur-sm"
+                title="Delete blog post"
+              >
+                <Trash2 className="h-3 w-3 mr-1" />
+                Delete
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Featured Image */}
+      {blog.image_url && (
+        <div className="px-6 pb-4">
+          <div className="relative rounded-xl overflow-hidden bg-slate-700/30">
+            <img
+              src={`http://localhost:5002${blog.image_url}`}
+              alt={blog.title}
+              className="w-full h-48 sm:h-64 object-cover hover:scale-105 transition-transform duration-500"
+              loading="lazy"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent"></div>
+          </div>
+        </div>
+      )}
+
+      {/* Blog Content with Read More/Less */}
+      <div className="px-6 pb-4">
+        <div
+          className={`text-gray-300 text-sm leading-relaxed transition-all duration-300 ease-in-out ${isExpanded ? 'max-h-none' : 'max-h-32 overflow-hidden'
+            }`}
+        >
+          <div className="whitespace-pre-wrap break-words">
+            {displayContent}
+          </div>
+        </div>
+
+        {/* Read More/Less Button */}
+        {isLongContent && (
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="mt-3 text-purple-400 hover:text-purple-300 text-sm font-medium flex items-center transition-colors group/btn"
+          >
+            {isExpanded ? (
+              <>
+                <Minus className="h-3 w-3 mr-1 group-hover/btn:scale-110 transition-transform" />
+                Show Less
+              </>
+            ) : (
+              <>
+                <Plus className="h-3 w-3 mr-1 group-hover/btn:scale-110 transition-transform" />
+                Read More
+              </>
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* Video Link */}
+      {blog.video_url && (
+        <div className="px-6 pb-4">
+          <div className="bg-slate-700/30 rounded-xl p-4 border border-white/10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center text-sm text-gray-300">
+                <div className="h-8 w-8 bg-red-500/20 rounded-lg flex items-center justify-center mr-3">
+                  <ExternalLink className="h-4 w-4 text-red-400" />
+                </div>
+                <span>Video Content Available</span>
+              </div>
+              <a
+                href={blog.video_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-red-600/80 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-700 transition-colors flex items-center backdrop-blur-sm"
+              >
+                <ExternalLink className="h-3 w-3 mr-2" />
+                Watch Video
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Blog Footer */}
+      <div className="px-6 py-4 bg-slate-700/20 border-t border-white/10">
+        <div className="flex items-center justify-between text-xs text-gray-500">
+          <span>Published on {new Date(blog.created_at).toLocaleDateString()}</span>
+          <div className="flex items-center space-x-4">
+            <span className="flex items-center">
+              <Eye className="h-3 w-3 mr-1" />
+              Article
+            </span>
+            {blog.image_url && (
+              <span className="flex items-center">
+                <FileText className="h-3 w-3 mr-1" />
+                Image
+              </span>
+            )}
+            {blog.video_url && (
+              <span className="flex items-center">
+                <ExternalLink className="h-3 w-3 mr-1" />
+                Video
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+};
+
 const LearningManagementSystem = () => {
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState("login");
@@ -349,6 +519,21 @@ const LearningManagementSystem = () => {
   const [groupLinkForm, setGroupLinkForm] = useState("");
   const [courseGroupLink, setCourseGroupLink] = useState(null);
   const [groupLinkLoading, setGroupLinkLoading] = useState(false);
+  const [expandedPosts, setExpandedPosts] = useState(new Set());
+
+
+  // Blog states
+  const [blogs, setBlogs] = useState([]);
+  const [selectedBlog, setSelectedBlog] = useState(null);
+  const [blogForm, setBlogForm] = useState({
+    title: "",
+    content: "",
+    videoUrl: "",
+    blogImage: null,
+  });
+  const [editingBlog, setEditingBlog] = useState(null);
+  const [blogPage, setBlogPage] = useState(1);
+  const [blogTotalPages, setBlogTotalPages] = useState(1);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -503,6 +688,138 @@ const LearningManagementSystem = () => {
     } catch (error) {
       showMessage(error.message, "error");
     }
+  };
+
+  // Blog API Functions
+  // const fetchBlogs = async (page = 1) => {
+  //   try {
+  //     const data = await apiCall(`/blogs?page=${page}&limit=10`);
+  //     setBlogs(data.blogs);
+  //     setBlogTotalPages(data.totalPages);
+  //     setBlogPage(data.currentPage);
+  //   } catch (error) {
+  //     showMessage(error.message, "error");
+  //   }
+  // };
+  const fetchBlogs = async (page = 1) => {
+    try {
+      // Ensure page is a number
+      const pageNum = parseInt(page, 10) || 1;
+      const data = await apiCall(`/blogs?page=${pageNum}&limit=10`);
+      setBlogs(data.blogs);
+      setBlogTotalPages(data.totalPages);
+      setBlogPage(data.currentPage);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+
+  const createBlog = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const formData = new FormData();
+      Object.keys(blogForm).forEach((key) => {
+        if (blogForm[key] !== null && blogForm[key] !== "") {
+          formData.append(key, blogForm[key]);
+        }
+      });
+
+      const response = await fetch(`${API_BASE}/blogs`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        showMessage("Blog post created successfully!", "success");
+        setBlogForm({
+          title: "",
+          content: "",
+          videoUrl: "",
+          blogImage: null,
+        });
+        fetchBlogs();
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const updateBlog = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const formData = new FormData();
+      Object.keys(blogForm).forEach((key) => {
+        if (blogForm[key] !== null && blogForm[key] !== "") {
+          formData.append(key, blogForm[key]);
+        }
+      });
+
+      const response = await fetch(`${API_BASE}/blogs/${editingBlog.id}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        showMessage("Blog post updated successfully!", "success");
+        setEditingBlog(null);
+        setBlogForm({
+          title: "",
+          content: "",
+          videoUrl: "",
+          blogImage: null,
+        });
+        fetchBlogs();
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const deleteBlog = async (blogId) => {
+    if (!window.confirm("Are you sure you want to delete this blog post?")) return;
+
+    setLoading(true);
+    try {
+      await apiCall(`/blogs/${blogId}`, {
+        method: "DELETE",
+      });
+
+      showMessage("Blog post deleted successfully!", "success");
+      fetchBlogs();
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+    setLoading(false);
+  };
+
+  const startEditingBlog = (blog) => {
+    setEditingBlog(blog);
+    setBlogForm({
+      title: blog.title,
+      content: blog.content,
+      videoUrl: blog.video_url || "",
+      blogImage: null,
+    });
   };
 
   // Add these API functions in your React component
@@ -1623,6 +1940,7 @@ const LearningManagementSystem = () => {
   const fetchInitialData = async (userData) => {
     try {
       await fetchDashboardStats();
+      await fetchBlogs();
 
       if (userData.role === "admin") {
         await fetchTeachers();
@@ -2373,6 +2691,21 @@ const LearningManagementSystem = () => {
 
               <button
                 onClick={() => {
+                  setActiveSection("blogs");
+                  setSelectedCourse(null);
+                  setSidebarOpen(false);
+                }}
+                className={`w-full flex items-center px-4 py-3 rounded-xl text-left transition-all duration-200 ${activeSection === "blogs"
+                  ? "bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-white border border-purple-500/30 shadow-lg"
+                  : "text-gray-300 hover:bg-white/10 hover:text-white"
+                  }`}
+              >
+                <FileText className="h-5 w-5 mr-3" />
+                Blog
+              </button>
+
+              <button
+                onClick={() => {
                   setActiveSection("settings");
                   setSelectedCourse(null);
                   setSidebarOpen(false);
@@ -2771,6 +3104,315 @@ const LearningManagementSystem = () => {
                     Payment receipts will appear here once issued by your
                     teacher.
                   </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Blog Section */}
+          {/* Enhanced Blog Section - With Read More/Less */}
+          {activeSection === "blogs" && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-white">Blog Posts</h2>
+                  <p className="text-gray-400 text-sm mt-1">
+                    {blogs.length > 0
+                      ? `${blogs.length} post${blogs.length > 1 ? 's' : ''} available`
+                      : 'No posts available yet'
+                    }
+                  </p>
+                </div>
+                {(user.role === "admin" || user.role === "teacher") && (
+                  <button
+                    onClick={() => setSelectedBlog("create")}
+                    className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 transition-all duration-200 flex items-center shadow-lg hover:shadow-xl"
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Create Blog Post
+                  </button>
+                )}
+              </div>
+
+              {selectedBlog === "create" || editingBlog ? (
+                /* Enhanced Blog Form */
+                <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10 shadow-xl">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-xl font-semibold text-white flex items-center">
+                      <FileText className="h-5 w-5 mr-2 text-purple-400" />
+                      {editingBlog ? "Edit Blog Post" : "Create New Blog Post"}
+                    </h3>
+                    <button
+                      onClick={() => {
+                        setSelectedBlog(null);
+                        setEditingBlog(null);
+                        setBlogForm({
+                          title: "",
+                          content: "",
+                          videoUrl: "",
+                          blogImage: null,
+                        });
+                      }}
+                      className="text-gray-400 hover:text-white p-2 rounded-lg hover:bg-white/10 transition-colors"
+                    >
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+
+                  <form onSubmit={editingBlog ? updateBlog : createBlog} className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Blog Title *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={blogForm.title}
+                        onChange={(e) =>
+                          setBlogForm({
+                            ...blogForm,
+                            title: e.target.value,
+                          })
+                        }
+                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white placeholder-gray-400 transition-all"
+                        placeholder="Enter an engaging blog title..."
+                        maxLength="255"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        {blogForm.title.length}/255 characters
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Content *
+                      </label>
+                      <div className="relative">
+                        <textarea
+                          required
+                          value={blogForm.content}
+                          onChange={(e) =>
+                            setBlogForm({
+                              ...blogForm,
+                              content: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white placeholder-gray-400 transition-all resize-vertical"
+                          rows="10"
+                          placeholder="Write your blog content here... You can use line breaks for paragraphs."
+                          style={{ minHeight: '200px' }}
+                        />
+                        <div className="absolute bottom-3 right-3 text-xs text-gray-500">
+                          {blogForm.content.length} characters
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Tip: Use double line breaks for paragraphs
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Featured Image (Optional)
+                        </label>
+                        <div className="space-y-3">
+                          <input
+                            type="file"
+                            onChange={(e) =>
+                              setBlogForm({
+                                ...blogForm,
+                                blogImage: e.target.files[0],
+                              })
+                            }
+                            className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-purple-500 file:text-white hover:file:bg-purple-600 file:cursor-pointer"
+                            accept="image/*"
+                          />
+                          <p className="text-xs text-gray-500">
+                            Recommended: 16:9 aspect ratio, max 5MB
+                          </p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Video URL (Optional)
+                        </label>
+                        <input
+                          type="url"
+                          value={blogForm.videoUrl}
+                          onChange={(e) =>
+                            setBlogForm({
+                              ...blogForm,
+                              videoUrl: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white placeholder-gray-400 transition-all"
+                          placeholder="https://youtube.com/watch?v=..."
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          YouTube, Vimeo, or any video URL
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-white/10">
+                      <button
+                        type="submit"
+                        disabled={loading}
+                        className="flex-1 sm:flex-none bg-gradient-to-r from-purple-500 to-pink-500 text-white px-8 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center justify-center shadow-lg"
+                      >
+                        {loading ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2"></div>
+                            {editingBlog ? "Updating..." : "Creating..."}
+                          </>
+                        ) : (
+                          <>
+                            <FileText className="h-4 w-4 mr-2" />
+                            {editingBlog ? "Update Blog Post" : "Publish Blog Post"}
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedBlog(null);
+                          setEditingBlog(null);
+                          setBlogForm({
+                            title: "",
+                            content: "",
+                            videoUrl: "",
+                            blogImage: null,
+                          });
+                        }}
+                        className="flex-1 sm:flex-none bg-slate-600 text-white px-8 py-3 rounded-xl hover:bg-slate-700 transition-all duration-200 flex items-center justify-center"
+                      >
+                        <X className="h-4 w-4 mr-2" />
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              ) : (
+                /* Enhanced Blog List - With Read More/Less */
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 gap-6">
+                    {blogs.map((blog) => {
+                      const isLongContent = blog.content.length > 500;
+                      const blogKey = `blog-${blog.id}`;
+
+                      return (
+                        <BlogPostCard
+                          key={blog.id}
+                          blog={blog}
+                          user={user}
+                          isLongContent={isLongContent}
+                          onEdit={startEditingBlog}
+                          onDelete={deleteBlog}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {/* Enhanced Pagination */}
+                  {blogTotalPages > 1 && (
+                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-6 border-t border-white/10">
+                      <p className="text-sm text-gray-400">
+                        Page {blogPage} of {blogTotalPages}
+                      </p>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => fetchBlogs(1)}
+                          disabled={blogPage === 1}
+                          className="px-3 py-2 bg-slate-700/50 text-white rounded-lg hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          title="First page"
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                          <ChevronLeft className="h-4 w-4 -ml-2" />
+                        </button>
+                        <button
+                          onClick={() => fetchBlogs(blogPage - 1)}
+                          disabled={blogPage === 1}
+                          className="px-3 py-2 bg-slate-700/50 text-white rounded-lg hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          title="Previous page"
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                        </button>
+
+                        <div className="flex space-x-1">
+                          {Array.from({ length: Math.min(5, blogTotalPages) }, (_, i) => {
+                            let pageNum;
+                            if (blogTotalPages <= 5) {
+                              pageNum = i + 1;
+                            } else if (blogPage <= 3) {
+                              pageNum = i + 1;
+                            } else if (blogPage >= blogTotalPages - 2) {
+                              pageNum = blogTotalPages - 4 + i;
+                            } else {
+                              pageNum = blogPage - 2 + i;
+                            }
+
+                            return (
+                              <button
+                                key={pageNum}
+                                onClick={() => fetchBlogs(pageNum)}
+                                className={`px-3 py-2 rounded-lg text-sm transition-colors ${blogPage === pageNum
+                                  ? "bg-purple-500 text-white shadow-lg"
+                                  : "bg-slate-700/50 text-gray-300 hover:bg-slate-600"
+                                  }`}
+                              >
+                                {pageNum}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <button
+                          onClick={() => fetchBlogs(blogPage + 1)}
+                          disabled={blogPage === blogTotalPages}
+                          className="px-3 py-2 bg-slate-700/50 text-white rounded-lg hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          title="Next page"
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => fetchBlogs(blogTotalPages)}
+                          disabled={blogPage === blogTotalPages}
+                          className="px-3 py-2 bg-slate-700/50 text-white rounded-lg hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          title="Last page"
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                          <ChevronRight className="h-4 w-4 -ml-2" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Empty State */}
+                  {blogs.length === 0 && (
+                    <div className="text-center py-16">
+                      <div className="h-20 w-20 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <FileText className="h-10 w-10 text-gray-400" />
+                      </div>
+                      <h3 className="text-xl font-medium text-white mb-3">
+                        No blog posts yet
+                      </h3>
+                      <p className="text-gray-400 mb-6 max-w-md mx-auto">
+                        {user.role === "admin" || user.role === "teacher"
+                          ? "Share your knowledge and insights with the community by creating your first blog post."
+                          : "Blog posts from teachers and administrators will appear here. Check back soon for updates!"}
+                      </p>
+                      {(user.role === "admin" || user.role === "teacher") && (
+                        <button
+                          onClick={() => setSelectedBlog("create")}
+                          className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 transition-all duration-200 flex items-center mx-auto"
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Create Your First Post
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -4763,10 +5405,10 @@ const LearningManagementSystem = () => {
                                         {student.project_status && (
                                           <span
                                             className={`px-2 py-1 rounded text-xs ${student.project_status === "approved"
-                                                ? "bg-green-500/20 text-green-300"
-                                                : student.project_status === "rejected"
-                                                  ? "bg-red-500/20 text-red-300"
-                                                  : "bg-yellow-500/20 text-yellow-300"
+                                              ? "bg-green-500/20 text-green-300"
+                                              : student.project_status === "rejected"
+                                                ? "bg-red-500/20 text-red-300"
+                                                : "bg-yellow-500/20 text-yellow-300"
                                               }`}
                                           >
                                             Project: {student.project_status}
