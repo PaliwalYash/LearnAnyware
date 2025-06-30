@@ -46,6 +46,177 @@ import Markdown from "react-markdown";
 
 const API_BASE = "http://localhost:5002/api";
 
+// Add this component before your main LearningManagementSystem component
+const TeacherSearchInput = ({ value, onChange, onSelect, placeholder }) => {
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const searchTeachers = async (query) => {
+    if (!query.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem("token");
+      const response = await fetch(`${API_BASE}/teachers/search?q=${encodeURIComponent(query)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await response.json();
+      setSuggestions(data);
+      setShowSuggestions(true);
+    } catch (error) {
+      console.error("Search teachers error:", error);
+      setSuggestions([]);
+    }
+    setLoading(false);
+  };
+
+  const handleInputChange = (e) => {
+    const newValue = e.target.value;
+    onChange(newValue);
+    searchTeachers(newValue);
+  };
+
+  const handleSelectTeacher = (teacher) => {
+    onSelect(teacher);
+    setShowSuggestions(false);
+  };
+
+  return (
+    <div className="relative">
+      <input
+        type="email"
+        placeholder={placeholder}
+        value={value}
+        onChange={handleInputChange}
+        onFocus={() => value && setShowSuggestions(true)}
+        onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+        className="flex-1 px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white w-full"
+        required
+      />
+
+      {loading && (
+        <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+          <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      )}
+
+      {showSuggestions && suggestions.length > 0 && (
+        <div className="absolute z-10 w-full mt-1 bg-slate-800 border border-white/20 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+          {suggestions.map((teacher) => (
+            <div
+              key={teacher.id}
+              onClick={() => handleSelectTeacher(teacher)}
+              className="px-4 py-3 hover:bg-slate-700/50 cursor-pointer border-b border-white/10 last:border-b-0"
+            >
+              <div className="font-medium text-white">{teacher.name}</div>
+              <div className="text-sm text-gray-400">{teacher.email}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Add this component before your main LearningManagementSystem component
+const StudentSearchInput = ({ value, onChange, onSelect, placeholder, courseId }) => {
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const searchStudents = async (query) => {
+    if (!query.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem("token");
+      let url = `${API_BASE}/students/search?q=${encodeURIComponent(query)}`;
+      if (courseId) {
+        url += `&courseId=${courseId}`;
+      }
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await response.json();
+      setSuggestions(data);
+      setShowSuggestions(true);
+    } catch (error) {
+      console.error("Search students error:", error);
+      setSuggestions([]);
+    }
+    setLoading(false);
+  };
+
+  const handleInputChange = (e) => {
+    const newValue = e.target.value;
+    onChange(newValue);
+    searchStudents(newValue);
+  };
+
+  const handleSelectStudent = (student) => {
+    onSelect(student);
+    setShowSuggestions(false);
+  };
+
+  return (
+    <div className="relative">
+      <input
+        type="email"
+        placeholder={placeholder}
+        value={value}
+        onChange={handleInputChange}
+        onFocus={() => value && setShowSuggestions(true)}
+        onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+        className="flex-1 px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white w-full"
+        required
+      />
+
+      {loading && (
+        <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+          <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      )}
+
+      {showSuggestions && suggestions.length > 0 && (
+        <div className="absolute z-10 w-full mt-1 bg-slate-800 border border-white/20 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+          {suggestions.map((student) => (
+            <div
+              key={student.id}
+              onClick={() => handleSelectStudent(student)}
+              className="px-4 py-3 hover:bg-slate-700/50 cursor-pointer border-b border-white/10 last:border-b-0"
+            >
+              <div className="font-medium text-white">{student.name}</div>
+              <div className="text-sm text-gray-400">{student.email}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showSuggestions && suggestions.length === 0 && value.trim() && !loading && (
+        <div className="absolute z-10 w-full mt-1 bg-slate-800 border border-white/20 rounded-xl shadow-lg">
+          <div className="px-4 py-3 text-gray-400 text-sm">
+            No students found or all students are already enrolled
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const LearningManagementSystem = () => {
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState("login");
@@ -94,6 +265,14 @@ const LearningManagementSystem = () => {
   const [assignmentFeedback, setAssignmentFeedback] = useState("");
   const [editingAssignment, setEditingAssignment] = useState(null);
 
+  const [subTeachers, setSubTeachers] = useState([]);
+  const [subTeacherEmail, setSubTeacherEmail] = useState("");
+  const [allCourseTeachers, setAllCourseTeachers] = useState([]);
+  const [courseTeachers, setCourseTeachers] = useState([]);
+  const [teacherSearchValue, setTeacherSearchValue] = useState("");
+  const [studentSearchValue, setStudentSearchValue] = useState("");
+
+
   // Form states
   const [authForm, setAuthForm] = useState({
     name: "",
@@ -107,6 +286,8 @@ const LearningManagementSystem = () => {
     description: "",
     duration_days: 30,
     group_link: "",
+    start_date: "",
+    end_date: "",
   });
 
   const [sessionForm, setSessionForm] = useState({
@@ -114,6 +295,8 @@ const LearningManagementSystem = () => {
     notes: "",
     meetLink: "",
     sessionDate: new Date().toISOString().split("T")[0],
+    sessionTime: "",
+    conductedBy: "",
     notesFile: null,
   });
 
@@ -180,37 +363,19 @@ const LearningManagementSystem = () => {
     if (selectedCourse && selectedCourse !== "create") {
       fetchSessions(selectedCourse.id);
       fetchAssignments(selectedCourse.id);
+      fetchCourseTeachers(selectedCourse.id);
       if (user?.role === "teacher") {
         fetchCourseStudents(selectedCourse.id);
         fetchProjects(selectedCourse.id);
         fetchAttendance(selectedCourse.id);
+        fetchSubTeachers(selectedCourse.id);
+        fetchAllCourseTeachers(selectedCourse.id);
       } else if (user?.role === "student") {
         fetchMyProject(selectedCourse.id);
       }
     }
   }, [selectedCourse, user]);
 
-  // const fetchInitialData = async (userData) => {
-  //   try {
-  //     await fetchDashboardStats();
-
-  //     if (userData.role === "admin") {
-  //       await fetchTeachers();
-  //     } else if (userData.role === "teacher") {
-  //       await Promise.all([fetchCourses(), fetchTeacherStudents()]);
-  //     } else if (userData.role === "student") {
-  //       await Promise.all([
-  //         fetchCourses(),
-  //         fetchCertificates(),
-  //         fetchReceipts(),
-  //         fetchChatHistory(),
-  //       ]);
-  //       setProfileForm({ name: userData.name });
-  //     }
-  //   } catch (error) {
-  //     showMessage("Error loading initial data", "error");
-  //   }
-  // };
   const deleteReceipt = async (receiptId) => {
     setLoading(true);
     try {
@@ -338,6 +503,85 @@ const LearningManagementSystem = () => {
     } catch (error) {
       showMessage(error.message, "error");
     }
+  };
+
+  // Add these API functions in your React component
+
+  const fetchSubTeachers = async (courseId) => {
+    try {
+      const data = await apiCall(`/courses/${courseId}/sub-teachers`);
+      setSubTeachers(data);
+    } catch (error) {
+      console.error("Fetch sub-teachers error:", error);
+    }
+  };
+
+  const fetchAllCourseTeachers = async (courseId) => {
+    try {
+      // Use the existing API endpoint that gets all course teachers
+      const courseTeachers = await apiCall(`/courses/${courseId}/teachers`);
+
+      // Set the data for the dropdown
+      setAllCourseTeachers(courseTeachers);
+    } catch (error) {
+      console.error("Fetch course teachers error:", error);
+      setAllCourseTeachers([]);
+    }
+  };
+
+  const fetchCourseTeachers = async (courseId) => {
+    try {
+      const data = await apiCall(`/courses/${courseId}/teachers`);
+      setCourseTeachers(data);
+    } catch (error) {
+      console.error("Fetch course teachers error:", error);
+    }
+  };
+
+  const handleTeacherSelect = (teacher) => {
+    setSubTeacherEmail(teacher.email);
+    setTeacherSearchValue(teacher.email);
+  };
+
+  const addSubTeacher = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      await apiCall(`/courses/${selectedCourse.id}/sub-teachers`, {
+        method: "POST",
+        body: JSON.stringify({ teacherEmail: subTeacherEmail }),
+      });
+
+      showMessage("Sub-teacher added successfully!", "success");
+      setSubTeacherEmail("");
+      setTeacherSearchValue("");
+      fetchSubTeachers(selectedCourse.id);
+      fetchAllCourseTeachers(selectedCourse.id);
+      fetchCourseTeachers(selectedCourse.id); // Add this line
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const removeSubTeacher = async (teacherId) => {
+    if (!window.confirm("Are you sure you want to remove this sub-teacher?")) return;
+
+    setLoading(true);
+    try {
+      await apiCall(`/courses/${selectedCourse.id}/sub-teachers/${teacherId}`, {
+        method: "DELETE",
+      });
+
+      showMessage("Sub-teacher removed successfully!", "success");
+      fetchSubTeachers(selectedCourse.id);
+      fetchAllCourseTeachers(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+    setLoading(false);
   };
 
   const fetchCertificates = async () => {
@@ -949,7 +1193,7 @@ const LearningManagementSystem = () => {
     try {
       const formData = new FormData();
       Object.keys(sessionForm).forEach((key) => {
-        if (sessionForm[key] !== null) {
+        if (sessionForm[key] !== null && sessionForm[key] !== "") {
           formData.append(key, sessionForm[key]);
         }
       });
@@ -968,13 +1212,7 @@ const LearningManagementSystem = () => {
       const data = await response.json();
       if (response.ok) {
         showMessage("Session created successfully!", "success");
-        setSessionForm({
-          title: "",
-          notes: "",
-          meetLink: "",
-          sessionDate: new Date().toISOString().split("T")[0],
-          notesFile: null,
-        });
+        resetSessionForm(); // Use the reset function
         fetchSessions(selectedCourse.id);
       } else {
         throw new Error(data.message);
@@ -993,7 +1231,7 @@ const LearningManagementSystem = () => {
     try {
       const formData = new FormData();
       Object.keys(sessionForm).forEach((key) => {
-        if (sessionForm[key] !== null) {
+        if (sessionForm[key] !== null && sessionForm[key] !== "") {
           formData.append(key, sessionForm[key]);
         }
       });
@@ -1012,14 +1250,7 @@ const LearningManagementSystem = () => {
       const data = await response.json();
       if (response.ok) {
         showMessage("Session updated successfully!", "success");
-        setEditingSession(null);
-        setSessionForm({
-          title: "",
-          notes: "",
-          meetLink: "",
-          sessionDate: new Date().toISOString().split("T")[0],
-          notesFile: null,
-        });
+        resetSessionForm(); // Use the reset function
         fetchSessions(selectedCourse.id);
       } else {
         throw new Error(data.message);
@@ -1061,11 +1292,18 @@ const LearningManagementSystem = () => {
 
       showMessage("Student added successfully!", "success");
       setStudentEmail("");
+      setStudentSearchValue(""); // Clear search value
       fetchCourseStudents(selectedCourse.id);
     } catch (error) {
       showMessage(error.message, "error");
     }
     setLoading(false);
+  };
+
+  // Add this function to handle student selection
+  const handleStudentSelect = (student) => {
+    setStudentEmail(student.email);
+    setStudentSearchValue(student.email);
   };
 
   const removeStudent = async (studentId) => {
@@ -1223,31 +1461,6 @@ const LearningManagementSystem = () => {
     setLoading(false);
   };
 
-  // const generateReceipt = async (e) => {
-  //   e.preventDefault();
-  //   setLoading(true);
-
-  //   try {
-  //     const data = await apiCall("/receipts", {
-  //       method: "POST",
-  //       body: JSON.stringify(receiptForm),
-  //     });
-
-  //     showMessage("Payment receipt generated successfully!", "success");
-  //     setReceiptForm({
-  //       studentId: "",
-  //       courseId: "",
-  //       amount: "",
-  //       gstRate: "18",
-  //       description: "",
-  //     });
-  //   } catch (error) {
-  //     showMessage(error.message, "error");
-  //   }
-
-  //   setLoading(false);
-  // };
-
   const updateStudentProfile = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -1300,6 +1513,8 @@ const LearningManagementSystem = () => {
       notes: session.notes || "",
       meetLink: session.meet_link || "",
       sessionDate: session.session_date,
+      sessionTime: session.session_time || "",
+      conductedBy: session.conducted_by || "",
       notesFile: null,
     });
   };
@@ -1310,10 +1525,24 @@ const LearningManagementSystem = () => {
       title: course.title,
       description: course.description,
       duration_days: course.duration_days,
-      group_link: course.group_link || ""
+      group_link: course.group_link || "",
+      start_date: course.start_date || "",
+      end_date: course.end_date || "",
     });
   };
 
+  const resetSessionForm = () => {
+    setSessionForm({
+      title: "",
+      notes: "",
+      meetLink: "",
+      sessionDate: new Date().toISOString().split("T")[0],
+      sessionTime: "",
+      conductedBy: "",
+      notesFile: null,
+    });
+    setEditingSession(null);
+  };
   // Add this useEffect to fetch group link when course is selected
   useEffect(() => {
     if (selectedCourse && selectedCourse !== "create" && selectedCourse.id) {
@@ -1945,10 +2174,10 @@ const LearningManagementSystem = () => {
                         <div className="flex items-center gap-2">
                           <span
                             className={`px-3 py-1 rounded-full text-sm font-medium ${submission.status === "approved"
-                                ? "bg-green-500/20 text-green-300 border border-green-500/30"
-                                : submission.status === "rejected"
-                                  ? "bg-red-500/20 text-red-300 border border-red-500/30"
-                                  : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
+                              ? "bg-green-500/20 text-green-300 border border-green-500/30"
+                              : submission.status === "rejected"
+                                ? "bg-red-500/20 text-red-300 border border-red-500/30"
+                                : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
                               }`}
                           >
                             {submission.status.charAt(0).toUpperCase() + submission.status.slice(1)}
@@ -2979,6 +3208,7 @@ const LearningManagementSystem = () => {
               </div>
 
               {/* Create Student Form */}
+              {/* Updated Create Student Form in Students Section */}
               <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
                 <h3 className="text-lg font-semibold text-white mb-4">
                   Create New Student
@@ -3635,6 +3865,40 @@ const LearningManagementSystem = () => {
                         />
                       </div>
                     </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Start Date (Optional)
+                        </label>
+                        <input
+                          type="date"
+                          value={courseForm.start_date}
+                          onChange={(e) =>
+                            setCourseForm({
+                              ...courseForm,
+                              start_date: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          End Date (Optional)
+                        </label>
+                        <input
+                          type="date"
+                          value={courseForm.end_date}
+                          onChange={(e) =>
+                            setCourseForm({
+                              ...courseForm,
+                              end_date: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        />
+                      </div>
+                    </div>
                     <div className="flex space-x-3">
                       <button
                         type="submit"
@@ -3730,6 +3994,40 @@ const LearningManagementSystem = () => {
                         />
                       </div>
                     </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Start Date (Optional)
+                        </label>
+                        <input
+                          type="date"
+                          value={courseForm.start_date}
+                          onChange={(e) =>
+                            setCourseForm({
+                              ...courseForm,
+                              start_date: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          End Date (Optional)
+                        </label>
+                        <input
+                          type="date"
+                          value={courseForm.end_date}
+                          onChange={(e) =>
+                            setCourseForm({
+                              ...courseForm,
+                              end_date: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        />
+                      </div>
+                    </div>
                     <div className="flex space-x-3">
                       <button
                         type="submit"
@@ -3746,7 +4044,9 @@ const LearningManagementSystem = () => {
                             title: "",
                             description: "",
                             duration_days: 30,
-                            group_link: ""
+                            group_link: "",
+                            start_date: "",
+                            end_date: "",
                           });
                         }}
                         className="bg-slate-600 text-white px-6 py-3 rounded-xl hover:bg-slate-700 transition-all duration-200"
@@ -3845,6 +4145,7 @@ const LearningManagementSystem = () => {
                           user.role === "teacher" ? "students" : "project",
                           user.role === "teacher" ? "projects" : null,
                           user.role === "teacher" ? "attendance" : null,
+                          user.role === "teacher" ? "subteachers" : null,
                         ]
                           .filter(Boolean)
                           .map((tab) => (
@@ -3856,7 +4157,7 @@ const LearningManagementSystem = () => {
                                 : "border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-500"
                                 }`}
                             >
-                              {tab}
+                              {tab === "subteachers" ? "Sub Teachers" : tab}
                             </button>
                           ))}
                       </nav>
@@ -3987,7 +4288,7 @@ const LearningManagementSystem = () => {
                             </div>
                           </div>
 
-                          {/* Course Information */}
+                          {/* Updated Course Information */}
                           <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
                             <h4 className="text-lg font-medium text-white mb-3">Course Information</h4>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
@@ -4001,6 +4302,23 @@ const LearningManagementSystem = () => {
                                   {new Date(selectedCourse.created_at).toLocaleDateString()}
                                 </span>
                               </div>
+                              {selectedCourse.start_date && (
+                                <div>
+                                  <span className="text-gray-400">Start Date:</span>
+                                  <span className="text-white ml-2">
+                                    {new Date(selectedCourse.start_date).toLocaleDateString()}
+                                  </span>
+                                </div>
+                              )}
+                              {selectedCourse.end_date && (
+                                <div>
+                                  <span className="text-gray-400">End Date:</span>
+                                  <span className="text-white ml-2">
+                                    {new Date(selectedCourse.end_date).toLocaleDateString()}
+                                  </span>
+                                </div>
+                              )}
+
                               {user.role === "teacher" && (
                                 <>
                                   <div>
@@ -4016,10 +4334,6 @@ const LearningManagementSystem = () => {
                               {user.role === "student" && (
                                 <>
                                   <div>
-                                    <span className="text-gray-400">Teacher:</span>
-                                    <span className="text-white ml-2">{selectedCourse.teacher_name}</span>
-                                  </div>
-                                  <div>
                                     <span className="text-gray-400">Status:</span>
                                     <span className={`ml-2 ${selectedCourse.completed_at ? 'text-green-300' : 'text-blue-300'}`}>
                                       {selectedCourse.completed_at ? 'Completed' : 'In Progress'}
@@ -4027,6 +4341,29 @@ const LearningManagementSystem = () => {
                                   </div>
                                 </>
                               )}
+
+                              {/* Teachers Information - Show only names */}
+                              <div className="col-span-2">
+                                <span className="text-gray-400">Teachers:</span>
+                                <div className="mt-2">
+                                  {courseTeachers.map((teacher, index) => (
+                                    <div key={teacher.id} className="flex items-center justify-between py-1">
+                                      <span className="text-white">
+                                        {teacher.name}
+                                      </span>
+                                      <span className={`px-2 py-1 rounded-full text-xs ${teacher.role === 'main'
+                                        ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                        : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                        }`}>
+                                        {teacher.role === 'main' ? 'Main Teacher' : 'Sub Teacher'}
+                                      </span>
+                                    </div>
+                                  ))}
+                                  {courseTeachers.length === 0 && (
+                                    <span className="text-gray-400 text-sm">Loading teachers...</span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
                           </div>
 
@@ -4080,12 +4417,7 @@ const LearningManagementSystem = () => {
                                   ? "Edit Session"
                                   : "Create Session"}
                               </h3>
-                              <form
-                                onSubmit={
-                                  editingSession ? updateSession : createSession
-                                }
-                                className="space-y-4"
-                              >
+                              <form onSubmit={editingSession ? updateSession : createSession} className="space-y-4">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                   <div>
                                     <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -4121,6 +4453,47 @@ const LearningManagementSystem = () => {
                                       }
                                       className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
                                     />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Session Time
+                                    </label>
+                                    <input
+                                      type="time"
+                                      value={sessionForm.sessionTime}
+                                      onChange={(e) =>
+                                        setSessionForm({
+                                          ...sessionForm,
+                                          sessionTime: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Conducted By
+                                    </label>
+                                    <select
+                                      value={sessionForm.conductedBy}
+                                      onChange={(e) =>
+                                        setSessionForm({
+                                          ...sessionForm,
+                                          conductedBy: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    >
+                                      <option value="">Select Teacher</option>
+                                      {allCourseTeachers.map((teacher) => (
+                                        <option key={teacher.id} value={teacher.id}>
+                                          {teacher.name} ({teacher.role === 'main' ? 'Main Teacher' : 'Sub Teacher'})
+                                        </option>
+                                      ))}
+                                    </select>
                                   </div>
                                 </div>
                                 <div>
@@ -4191,18 +4564,7 @@ const LearningManagementSystem = () => {
                                   {editingSession && (
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        setEditingSession(null);
-                                        setSessionForm({
-                                          title: "",
-                                          notes: "",
-                                          meetLink: "",
-                                          sessionDate: new Date()
-                                            .toISOString()
-                                            .split("T")[0],
-                                          notesFile: null,
-                                        });
-                                      }}
+                                      onClick={resetSessionForm}
                                       className="bg-slate-600 text-white px-6 py-3 rounded-xl hover:bg-slate-700 transition-all duration-200"
                                     >
                                       Cancel
@@ -4230,11 +4592,16 @@ const LearningManagementSystem = () => {
                                         {session.title}
                                       </h4>
                                       <p className="text-sm text-gray-400 mt-1">
-                                        Date:{" "}
-                                        {new Date(
-                                          session.session_date
-                                        ).toLocaleDateString()}
+                                        Date: {new Date(session.session_date).toLocaleDateString()}
+                                        {session.session_time && (
+                                          <span> • Time: {session.session_time}</span>
+                                        )}
                                       </p>
+                                      {session.conducted_by_name && (
+                                        <p className="text-sm text-gray-400">
+                                          Conducted by: {session.conducted_by_name}
+                                        </p>
+                                      )}
                                       {session.notes && (
                                         <p className="text-sm text-gray-300 mt-2">
                                           {session.notes}
@@ -4329,29 +4696,26 @@ const LearningManagementSystem = () => {
                       {/* Students Tab for Teachers */}
                       {activeTab === "students" && user.role === "teacher" && (
                         <div className="space-y-6">
-                          {/* Add Student Form */}
+                          {/* Updated Add Student Form */}
                           <div className="border-b border-white/10 pb-6">
                             <h3 className="text-lg font-semibold text-white mb-4">
                               Add Student to Course
                             </h3>
-                            <form
-                              onSubmit={addStudent}
-                              className="flex space-x-3"
-                            >
-                              <input
-                                type="email"
-                                placeholder="Student email"
+                            <form onSubmit={addStudent} className="flex space-x-3">
+                              <StudentSearchInput
                                 value={studentEmail}
-                                onChange={(e) =>
-                                  setStudentEmail(e.target.value)
-                                }
-                                className="flex-1 px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
-                                required
+                                onChange={(value) => {
+                                  setStudentEmail(value);
+                                  setStudentSearchValue(value);
+                                }}
+                                onSelect={handleStudentSelect}
+                                placeholder="Search and select student by name or email"
+                                courseId={selectedCourse.id}
                               />
                               <button
                                 type="submit"
                                 disabled={loading}
-                                className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center whitespace-nowrap"
                               >
                                 <Users className="h-4 w-4 mr-2" />
                                 Add Student
@@ -4360,9 +4724,10 @@ const LearningManagementSystem = () => {
                           </div>
 
                           {/* Students List */}
+                          {/* Enhanced Students List */}
                           <div>
                             <h3 className="text-lg font-semibold text-white mb-4">
-                              Enrolled Students
+                              Enrolled Students ({students.length})
                             </h3>
                             <div className="space-y-3">
                               {students.map((student) => (
@@ -4370,48 +4735,44 @@ const LearningManagementSystem = () => {
                                   key={student.id}
                                   className="flex items-center justify-between p-4 bg-slate-700/30 rounded-xl border border-white/10"
                                 >
-                                  <div>
-                                    <h4 className="font-medium text-white">
-                                      {student.name}
-                                    </h4>
-                                    <p className="text-sm text-gray-400">
-                                      {student.email}
-                                    </p>
-                                    <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
-                                      <span>
-                                        Enrolled:{" "}
-                                        {new Date(
-                                          student.enrolled_at
-                                        ).toLocaleDateString()}
-                                      </span>
-                                      {student.completed_at && (
-                                        <span className="text-green-400">
-                                          Completed:{" "}
-                                          {new Date(
-                                            student.completed_at
-                                          ).toLocaleDateString()}
-                                        </span>
-                                      )}
+                                  <div className="flex items-center space-x-4">
+                                    <div className="h-10 w-10 bg-gradient-to-r from-green-400 to-blue-400 rounded-xl flex items-center justify-center">
+                                      <GraduationCap className="h-5 w-5 text-white" />
                                     </div>
-                                    <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
-                                      <span>
-                                        Attendance: {student.present_count || 0}
-                                        /{student.total_attendance || 0}
-                                      </span>
-                                      {student.project_status && (
-                                        <span
-                                          className={`px-2 py-1 rounded text-xs ${student.project_status ===
-                                            "approved"
-                                            ? "bg-green-500/20 text-green-300"
-                                            : student.project_status ===
-                                              "rejected"
-                                              ? "bg-red-500/20 text-red-300"
-                                              : "bg-yellow-500/20 text-yellow-300"
-                                            }`}
-                                        >
-                                          Project: {student.project_status}
+                                    <div>
+                                      <h4 className="font-medium text-white">
+                                        {student.name}
+                                      </h4>
+                                      <p className="text-sm text-gray-400">
+                                        {student.email}
+                                      </p>
+                                      <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
+                                        <span>
+                                          Enrolled: {new Date(student.enrolled_at).toLocaleDateString()}
                                         </span>
-                                      )}
+                                        {student.completed_at && (
+                                          <span className="text-green-400">
+                                            Completed: {new Date(student.completed_at).toLocaleDateString()}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
+                                        <span>
+                                          Attendance: {student.present_count || 0}/{student.total_attendance || 0}
+                                        </span>
+                                        {student.project_status && (
+                                          <span
+                                            className={`px-2 py-1 rounded text-xs ${student.project_status === "approved"
+                                                ? "bg-green-500/20 text-green-300"
+                                                : student.project_status === "rejected"
+                                                  ? "bg-red-500/20 text-red-300"
+                                                  : "bg-yellow-500/20 text-yellow-300"
+                                              }`}
+                                          >
+                                            Project: {student.project_status}
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                   <button
@@ -4428,9 +4789,7 @@ const LearningManagementSystem = () => {
                                   <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                                     <Users className="h-8 w-8 text-gray-400" />
                                   </div>
-                                  <p className="text-gray-400">
-                                    No students enrolled yet.
-                                  </p>
+                                  <p className="text-gray-400">No students enrolled yet.</p>
                                 </div>
                               )}
                             </div>
@@ -4921,6 +5280,83 @@ const LearningManagementSystem = () => {
                             </div>
                           </div>
                         )}
+
+                      {activeTab === "subteachers" && user.role === "teacher" && (
+                        <div className="space-y-6">
+                          {/* Updated Add Sub-Teacher Form */}
+                          <div className="border-b border-white/10 pb-6">
+                            <h3 className="text-lg font-semibold text-white mb-4">
+                              Add Sub-Teacher
+                            </h3>
+                            <form onSubmit={addSubTeacher} className="flex space-x-3">
+                              <TeacherSearchInput
+                                value={subTeacherEmail}
+                                onChange={(value) => {
+                                  setSubTeacherEmail(value);
+                                  setTeacherSearchValue(value);
+                                }}
+                                onSelect={handleTeacherSelect}
+                                placeholder="Search and select teacher by name or email"
+                              />
+                              <button
+                                type="submit"
+                                disabled={loading}
+                                className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center whitespace-nowrap"
+                              >
+                                <UserPlus className="h-4 w-4 mr-2" />
+                                Add Sub-Teacher
+                              </button>
+                            </form>
+                          </div>
+
+                          {/* Sub-Teachers List */}
+                          <div>
+                            <h3 className="text-lg font-semibold text-white mb-4">
+                              Sub-Teachers
+                            </h3>
+                            <div className="space-y-3">
+                              {subTeachers.map((subTeacher) => (
+                                <div
+                                  key={subTeacher.id}
+                                  className="flex items-center justify-between p-4 bg-slate-700/30 rounded-xl border border-white/10"
+                                >
+                                  <div>
+                                    <h4 className="font-medium text-white">
+                                      {subTeacher.name}
+                                    </h4>
+                                    <p className="text-sm text-gray-400">
+                                      {subTeacher.email}
+                                    </p>
+                                    <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
+                                      <span>
+                                        Added: {new Date(subTeacher.added_at).toLocaleDateString()}
+                                      </span>
+                                      <span>
+                                        Added by: {subTeacher.added_by_name}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    onClick={() => removeSubTeacher(subTeacher.teacher_id)}
+                                    className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-colors flex items-center"
+                                  >
+                                    <UserX className="h-4 w-4 mr-1" />
+                                    Remove
+                                  </button>
+                                </div>
+                              ))}
+                              {subTeachers.length === 0 && (
+                                <div className="text-center py-8">
+                                  <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                    <Users className="h-8 w-8 text-gray-400" />
+                                  </div>
+                                  <p className="text-gray-400">No sub-teachers added yet.</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Assignments Tab - Updated */}
                       {activeTab === "assignments" && (

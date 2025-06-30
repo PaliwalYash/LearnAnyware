@@ -168,6 +168,8 @@ async function createTables() {
     teacher_id INT NOT NULL,
     duration_days INT DEFAULT 30,
     group_link VARCHAR(500) NULL,
+    start_date DATE DEFAULT NULL,
+    end_date DATE DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE
   )`);
@@ -202,6 +204,9 @@ async function createTables() {
     meet_link VARCHAR(500),
     session_date DATE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    session_time TIME DEFAULT NULL,
+    conducted_by INT NULL,
+    FOREIGN KEY (conducted_by) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
   )`);
 
@@ -299,6 +304,20 @@ async function createTables() {
   UNIQUE KEY unique_submission (assignment_id, student_id)
 )`);
 
+  await db.query(`CREATE TABLE IF NOT EXISTS course_teachers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  teacher_id INT NOT NULL,
+  added_by INT NOT NULL,
+  role ENUM('main', 'sub') DEFAULT 'sub',
+  added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+  FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_course_teacher (course_id, teacher_id)
+)`);
+
+
   console.log("Assignment tables created successfully");
   // Add missing columns to projects table
   const projectColumns = [{ name: "verified_by", type: "INT NULL" }];
@@ -383,6 +402,22 @@ async function createTables() {
 
   console.log("Database tables created successfully");
 }
+
+// Helper function to check course access (main teacher or sub-teacher)
+const checkCourseAccess = async (courseId, userId) => {
+  try {
+    const [accessCheck] = await db.execute(
+      `SELECT 1 FROM courses WHERE id = ? AND teacher_id = ?
+       UNION
+       SELECT 1 FROM course_teachers WHERE course_id = ? AND teacher_id = ?`,
+      [courseId, userId, courseId, userId]
+    );
+    return accessCheck.length > 0;
+  } catch (error) {
+    console.error("Course access check error:", error);
+    return false;
+  }
+};
 
 // Create default admin user
 async function createDefaultAdmin() {
@@ -1246,12 +1281,8 @@ app.post(
         return res.status(400).json({ message: "End date must be after start date" });
       }
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
-      );
-
-      if (courseCheck.length === 0) {
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
         return res.status(404).json({ message: "Course not found or not authorized" });
       }
 
@@ -1288,18 +1319,20 @@ app.get(
       let accessParams;
 
       if (req.user.role === "teacher") {
-        accessQuery = "SELECT id FROM courses WHERE id = ? AND teacher_id = ?";
-        accessParams = [courseId, req.user.userId];
+        const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+        if (!hasAccess) {
+          return res.status(403).json({ message: "Not authorized to view assignments" });
+        }
       } else if (req.user.role === "student") {
-        accessQuery = "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?";
-        accessParams = [courseId, req.user.userId];
+        const [enrollmentCheck] = await db.execute(
+          "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+          [courseId, req.user.userId]
+        );
+        if (enrollmentCheck.length === 0) {
+          return res.status(403).json({ message: "Not authorized to view assignments" });
+        }
       } else {
         return res.status(403).json({ message: "Access denied" });
-      }
-
-      const [accessCheck] = await db.execute(accessQuery, accessParams);
-      if (accessCheck.length === 0) {
-        return res.status(403).json({ message: "Not authorized to view assignments" });
       }
 
       let query = `
@@ -1331,7 +1364,7 @@ app.get(
 
           assignment.submission = submission[0] || null;
           assignment.is_overdue = new Date() > new Date(assignment.end_date);
-          assignment.can_submit = true; // Always allow submission now
+          assignment.can_submit = true;
 
           // Add status for after due date submissions
           if (assignment.submission) {
@@ -1449,13 +1482,14 @@ app.get(
     try {
       const { assignmentId } = req.params;
 
-      // Check if teacher owns the assignment
+      // Check if teacher has access to the assignment
       const [assignmentCheck] = await db.execute(
         `SELECT a.*, c.teacher_id 
          FROM assignments a
          JOIN courses c ON a.course_id = c.id
-         WHERE a.id = ? AND c.teacher_id = ?`,
-        [assignmentId, req.user.userId]
+         LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+         WHERE a.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)`,
+        [req.user.userId, assignmentId, req.user.userId, req.user.userId]
       );
 
       if (assignmentCheck.length === 0) {
@@ -1479,7 +1513,7 @@ app.get(
       const submissionsWithStatus = submissions.map(submission => {
         const submissionDate = new Date(submission.submitted_at);
         const dueDate = new Date(assignment.end_date);
-        
+
         return {
           ...submission,
           is_after_due_date: submissionDate > dueDate,
@@ -1510,14 +1544,15 @@ app.put(
         return res.status(400).json({ message: "Invalid status" });
       }
 
-      // Check if teacher owns the assignment
+      // Check if teacher has access to the assignment
       const [submissionCheck] = await db.execute(
         `SELECT ass.*, a.course_id, c.teacher_id 
          FROM assignment_submissions ass
          JOIN assignments a ON ass.assignment_id = a.id
          JOIN courses c ON a.course_id = c.id
-         WHERE ass.id = ? AND c.teacher_id = ?`,
-        [submissionId, req.user.userId]
+         LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+         WHERE ass.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)`,
+        [req.user.userId, submissionId, req.user.userId, req.user.userId]
       );
 
       if (submissionCheck.length === 0) {
@@ -1560,13 +1595,14 @@ app.put(
         return res.status(400).json({ message: "End date must be after start date" });
       }
 
-      // Check if teacher owns the assignment
+      // Check if teacher has access to the assignment
       const [assignmentCheck] = await db.execute(
         `SELECT a.*, c.teacher_id 
          FROM assignments a
          JOIN courses c ON a.course_id = c.id
-         WHERE a.id = ? AND c.teacher_id = ?`,
-        [assignmentId, req.user.userId]
+         LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+         WHERE a.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)`,
+        [req.user.userId, assignmentId, req.user.userId, req.user.userId]
       );
 
       if (assignmentCheck.length === 0) {
@@ -1611,8 +1647,9 @@ app.delete(
         `SELECT a.*, c.teacher_id 
          FROM assignments a
          JOIN courses c ON a.course_id = c.id
-         WHERE a.id = ? AND c.teacher_id = ?`,
-        [assignmentId, req.user.userId]
+         LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+         WHERE a.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)`,
+        [req.user.userId, assignmentId, req.user.userId, req.user.userId]
       );
 
       if (assignmentCheck.length === 0) {
@@ -2000,7 +2037,12 @@ app.post(
   checkUserStatus,
   async (req, res) => {
     try {
-      const { title, description, duration_days, group_link } = req.body;
+      const { title, description, duration_days, group_link, start_date, end_date } = req.body;
+
+      // Validate dates if provided
+      if (start_date && end_date && new Date(start_date) >= new Date(end_date)) {
+        return res.status(400).json({ message: "End date must be after start date" });
+      }
 
       // Validate group_link if provided
       if (group_link && !isValidUrl(group_link)) {
@@ -2008,8 +2050,8 @@ app.post(
       }
 
       const [result] = await db.execute(
-        "INSERT INTO courses (title, description, teacher_id, duration_days, group_link) VALUES (?, ?, ?, ?, ?)",
-        [title, description, req.user.userId, duration_days || 30, group_link || null]
+        "INSERT INTO courses (title, description, teacher_id, duration_days, group_link, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [title, description, req.user.userId, duration_days || 30, group_link || null, start_date || null, end_date || null]
       );
 
       res.status(201).json({
@@ -2032,14 +2074,19 @@ app.get(
       let query, params;
 
       if (req.user.role === "teacher") {
-        query = `SELECT c.*, u.name as teacher_name, 
-               COUNT(ce.student_id) as enrolled_students
-               FROM courses c 
-               LEFT JOIN users u ON c.teacher_id = u.id
-               LEFT JOIN course_enrollments ce ON c.id = ce.course_id
-               WHERE c.teacher_id = ?
-               GROUP BY c.id`;
-        params = [req.user.userId];
+        query = `
+          SELECT DISTINCT c.*, u.name as teacher_name, 
+                 COUNT(ce.student_id) as enrolled_students,
+                 CASE WHEN c.teacher_id = ? THEN 'main' ELSE 'sub' END as teacher_role
+          FROM courses c 
+          LEFT JOIN users u ON c.teacher_id = u.id
+          LEFT JOIN course_enrollments ce ON c.id = ce.course_id
+          LEFT JOIN course_teachers ct ON c.id = ct.course_id
+          WHERE c.teacher_id = ? OR ct.teacher_id = ?
+          GROUP BY c.id
+          ORDER BY teacher_role, c.created_at DESC
+        `;
+        params = [req.user.userId, req.user.userId, req.user.userId];
       } else if (req.user.role === "student") {
         query = `SELECT c.*, u.name as teacher_name, ce.enrolled_at, ce.completed_at
                FROM courses c 
@@ -2074,17 +2121,18 @@ app.put(
   async (req, res) => {
     try {
       const { courseId } = req.params;
-      const { title, description, duration_days, group_link } = req.body;
+      const { title, description, duration_days, group_link, start_date, end_date } = req.body;
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
-      );
-
-      if (courseCheck.length === 0) {
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
         return res
           .status(404)
           .json({ message: "Course not found or not authorized" });
+      }
+
+      // Validate dates if provided
+      if (start_date && end_date && new Date(start_date) >= new Date(end_date)) {
+        return res.status(400).json({ message: "End date must be after start date" });
       }
 
       // Validate group_link if provided
@@ -2093,13 +2141,60 @@ app.put(
       }
 
       await db.execute(
-        "UPDATE courses SET title = ?, description = ?, duration_days = ?, group_link = ? WHERE id = ?",
-        [title, description, duration_days, group_link || null, courseId]
+        "UPDATE courses SET title = ?, description = ?, duration_days = ?, group_link = ?, start_date = ?, end_date = ? WHERE id = ?",
+        [title, description, duration_days, group_link || null, start_date || null, end_date || null, courseId]
       );
 
       res.json({ message: "Course updated successfully" });
     } catch (error) {
       console.error("Update course error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Add this route after your existing courses routes
+app.get(
+  "/api/courses/:courseId",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      let hasAccess = false;
+
+      if (req.user.role === "teacher") {
+        hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      } else if (req.user.role === "student") {
+        const [enrollmentCheck] = await db.execute(
+          "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+          [courseId, req.user.userId]
+        );
+        hasAccess = enrollmentCheck.length > 0;
+      } else if (req.user.role === "admin") {
+        hasAccess = true;
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Not authorized to view this course" });
+      }
+
+      const [course] = await db.execute(
+        `SELECT c.*, u.name as teacher_name 
+         FROM courses c 
+         JOIN users u ON c.teacher_id = u.id 
+         WHERE c.id = ?`,
+        [courseId]
+      );
+
+      if (course.length === 0) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+
+      res.json(course[0]);
+    } catch (error) {
+      console.error("Get course details error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -2116,12 +2211,8 @@ app.put(
       const { courseId } = req.params;
       const { group_link } = req.body;
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
-      );
-
-      if (courseCheck.length === 0) {
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
         return res
           .status(404)
           .json({ message: "Course not found or not authorized" });
@@ -2157,33 +2248,35 @@ app.get(
     try {
       const { courseId } = req.params;
 
-      // Check if user is enrolled in the course (for students) or owns the course (for teachers)
-      let query;
-      let params;
+      let hasAccess = false;
 
       if (req.user.role === 'teacher') {
-        query = "SELECT group_link FROM courses WHERE id = ? AND teacher_id = ?";
-        params = [courseId, req.user.userId];
+        hasAccess = await checkCourseAccess(courseId, req.user.userId);
       } else if (req.user.role === 'student') {
-        query = `
-          SELECT c.group_link 
-          FROM courses c 
-          JOIN course_enrollments ce ON c.id = ce.course_id 
-          WHERE c.id = ? AND ce.student_id = ?
-        `;
-        params = [courseId, req.user.userId];
-      } else {
-        return res.status(403).json({ message: "Access denied" });
+        const [enrollmentCheck] = await db.execute(
+          "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+          [courseId, req.user.userId]
+        );
+        hasAccess = enrollmentCheck.length > 0;
+      } else if (req.user.role === 'admin') {
+        hasAccess = true;
       }
 
-      const [result] = await db.execute(query, params);
-
-      if (result.length === 0) {
+      if (!hasAccess) {
         return res.status(404).json({
           message: req.user.role === 'student'
             ? "Course not found or you are not enrolled"
             : "Course not found or not authorized"
         });
+      }
+
+      const [result] = await db.execute(
+        "SELECT group_link FROM courses WHERE id = ?",
+        [courseId]
+      );
+
+      if (result.length === 0) {
+        return res.status(404).json({ message: "Course not found" });
       }
 
       res.json({
@@ -2217,17 +2310,8 @@ app.post(
         return res.status(403).json({ message: "Not enrolled in this course" });
       }
 
-      // Log the group join activity (optional - create this table if you want analytics)
-      try {
-        await db.execute(
-          "INSERT INTO group_join_logs (course_id, student_id, joined_at) VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE joined_at = NOW()",
-          [courseId, req.user.userId]
-        );
-      } catch (logError) {
-        // Ignore logging errors - this is optional
-        console.log('Group join logging failed (optional feature):', logError.message);
-      }
-
+      // You can add group join logging here if needed
+      // For now, just return success
       res.json({ message: "Group join activity recorded" });
     } catch (error) {
       console.error("Group join tracking error:", error);
@@ -2255,6 +2339,7 @@ app.delete(
     try {
       const { courseId } = req.params;
 
+      // Only main teacher can delete course
       const [courseCheck] = await db.execute(
         "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
         [courseId, req.user.userId]
@@ -2263,7 +2348,7 @@ app.delete(
       if (courseCheck.length === 0) {
         return res
           .status(404)
-          .json({ message: "Course not found or not authorized" });
+          .json({ message: "Course not found or only main teacher can delete course" });
       }
 
       await db.execute("DELETE FROM courses WHERE id = ?", [courseId]);
@@ -2271,6 +2356,60 @@ app.delete(
       res.json({ message: "Course deleted successfully" });
     } catch (error) {
       console.error("Delete course error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get all teachers for a course (for course information display)
+app.get(
+  "/api/courses/:courseId/teachers",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      // Check if user has access to the course
+      let hasAccess = false;
+
+      if (req.user.role === "teacher") {
+        hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      } else if (req.user.role === "student") {
+        const [enrollmentCheck] = await db.execute(
+          "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+          [courseId, req.user.userId]
+        );
+        hasAccess = enrollmentCheck.length > 0;
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Not authorized to view course teachers" });
+      }
+
+      // Get main teacher
+      const [mainTeacher] = await db.execute(
+        `SELECT u.id, u.name, u.email, 'main' as role
+         FROM courses c
+         JOIN users u ON c.teacher_id = u.id
+         WHERE c.id = ?`,
+        [courseId]
+      );
+
+      // Get sub teachers
+      const [subTeachers] = await db.execute(
+        `SELECT u.id, u.name, u.email, 'sub' as role
+         FROM course_teachers ct
+         JOIN users u ON ct.teacher_id = u.id
+         WHERE ct.course_id = ?
+         ORDER BY u.name`,
+        [courseId]
+      );
+
+      const allTeachers = [...mainTeacher, ...subTeachers];
+      res.json(allTeachers);
+    } catch (error) {
+      console.error("Get course teachers error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -2287,17 +2426,14 @@ app.post(
       const { courseId } = req.params;
       const { email } = req.body;
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
-      );
-
-      if (courseCheck.length === 0) {
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
         return res
           .status(404)
           .json({ message: "Course not found or not authorized" });
       }
 
+      // Rest of the existing function code remains the same
       const [students] = await db.execute(
         'SELECT id FROM users WHERE email = ? AND role = "student"',
         [email]
@@ -2331,12 +2467,8 @@ app.delete(
     try {
       const { courseId, studentId } = req.params;
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
-      );
-
-      if (courseCheck.length === 0) {
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
         return res
           .status(404)
           .json({ message: "Course not found or not authorized" });
@@ -2364,18 +2496,14 @@ app.get(
     try {
       const { courseId } = req.params;
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
-      );
-
-      if (courseCheck.length === 0) {
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
         return res
           .status(404)
           .json({ message: "Course not found or not authorized" });
       }
 
-      // Get basic student info
+      // Rest of the existing function code remains the same
       const [students] = await db.execute(
         `
       SELECT 
@@ -2428,7 +2556,7 @@ app.get(
   }
 );
 
-// Session Management
+// Updated session creation route
 app.post(
   "/api/courses/:courseId/sessions",
   authenticateToken,
@@ -2438,23 +2566,40 @@ app.post(
   async (req, res) => {
     try {
       const { courseId } = req.params;
-      const { title, notes, meetLink, sessionDate } = req.body;
+      const { title, notes, meetLink, sessionDate, sessionTime, conductedBy } = req.body;
       const notesFile = req.file ? req.file.filename : null;
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
+      // Check if user has access to the course (main teacher or sub-teacher)
+      const [accessCheck] = await db.execute(
+        `SELECT 1 FROM courses WHERE id = ? AND teacher_id = ?
+         UNION
+         SELECT 1 FROM course_teachers WHERE course_id = ? AND teacher_id = ?`,
+        [courseId, req.user.userId, courseId, req.user.userId]
       );
 
-      if (courseCheck.length === 0) {
+      if (accessCheck.length === 0) {
         return res
           .status(404)
           .json({ message: "Course not found or not authorized" });
       }
 
+      // Validate conducted_by teacher has access to course
+      if (conductedBy) {
+        const [teacherAccessCheck] = await db.execute(
+          `SELECT 1 FROM courses WHERE id = ? AND teacher_id = ?
+           UNION
+           SELECT 1 FROM course_teachers WHERE course_id = ? AND teacher_id = ?`,
+          [courseId, conductedBy, courseId, conductedBy]
+        );
+
+        if (teacherAccessCheck.length === 0) {
+          return res.status(400).json({ message: "Selected teacher does not have access to this course" });
+        }
+      }
+
       const [result] = await db.execute(
-        "INSERT INTO daily_sessions (course_id, title, notes, notes_file, meet_link, session_date) VALUES (?, ?, ?, ?, ?, ?)",
-        [courseId, title, notes, notesFile, meetLink, sessionDate]
+        "INSERT INTO daily_sessions (course_id, title, notes, notes_file, meet_link, session_date, session_time, conducted_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [courseId, title, notes, notesFile, meetLink, sessionDate, sessionTime || null, conductedBy || req.user.userId]
       );
 
       const [students] = await db.execute(
@@ -2475,6 +2620,7 @@ app.post(
         notes,
         meetLink,
         sessionDate,
+        sessionTime,
       });
 
       res.status(201).json({
@@ -2488,6 +2634,7 @@ app.post(
   }
 );
 
+// Updated session fetch route
 app.get(
   "/api/courses/:courseId/sessions",
   authenticateToken,
@@ -2500,12 +2647,14 @@ app.get(
       SELECT ds.*, 
              COUNT(sa.student_id) as total_students,
              COUNT(CASE WHEN sa.marked_read = 1 THEN 1 END) as students_read,
-             COUNT(CASE WHEN sa.joined_meet = 1 THEN 1 END) as students_joined
+             COUNT(CASE WHEN sa.joined_meet = 1 THEN 1 END) as students_joined,
+             ct.name as conducted_by_name
       FROM daily_sessions ds
       LEFT JOIN session_attendance sa ON ds.id = sa.session_id
+      LEFT JOIN users ct ON ds.conducted_by = ct.id
       WHERE ds.course_id = ?
       GROUP BY ds.id
-      ORDER BY ds.session_date DESC
+      ORDER BY ds.session_date DESC, ds.session_time DESC
     `;
 
       if (req.user.role === "student") {
@@ -2521,11 +2670,13 @@ app.get(
         }
 
         query = `
-        SELECT ds.*, sa.marked_read, sa.joined_meet, sa.read_at, sa.joined_at
+        SELECT ds.*, sa.marked_read, sa.joined_meet, sa.read_at, sa.joined_at,
+               ct.name as conducted_by_name
         FROM daily_sessions ds
         LEFT JOIN session_attendance sa ON ds.id = sa.session_id AND sa.student_id = ?
+        LEFT JOIN users ct ON ds.conducted_by = ct.id
         WHERE ds.course_id = ?
-        ORDER BY ds.session_date DESC
+        ORDER BY ds.session_date DESC, ds.session_time DESC
       `;
       }
 
@@ -2541,6 +2692,7 @@ app.get(
   }
 );
 
+// Updated session update route
 app.put(
   "/api/sessions/:sessionId",
   authenticateToken,
@@ -2550,7 +2702,7 @@ app.put(
   async (req, res) => {
     try {
       const { sessionId } = req.params;
-      const { title, notes, meetLink, sessionDate } = req.body;
+      const { title, notes, meetLink, sessionDate, sessionTime, conductedBy } = req.body;
       const notesFile = req.file ? req.file.filename : null;
 
       const [sessionCheck] = await db.execute(
@@ -2558,9 +2710,10 @@ app.put(
       SELECT ds.*, c.teacher_id 
       FROM daily_sessions ds
       JOIN courses c ON ds.course_id = c.id
-      WHERE ds.id = ? AND c.teacher_id = ?
+      LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+      WHERE ds.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)
     `,
-        [sessionId, req.user.userId]
+        [req.user.userId, sessionId, req.user.userId, req.user.userId]
       );
 
       if (sessionCheck.length === 0) {
@@ -2570,8 +2723,8 @@ app.put(
       }
 
       let updateQuery =
-        "UPDATE daily_sessions SET title = ?, notes = ?, meet_link = ?, session_date = ?";
-      let params = [title, notes, meetLink, sessionDate];
+        "UPDATE daily_sessions SET title = ?, notes = ?, meet_link = ?, session_date = ?, session_time = ?, conducted_by = ?";
+      let params = [title, notes, meetLink, sessionDate, sessionTime || null, conductedBy || req.user.userId];
 
       if (notesFile) {
         updateQuery += ", notes_file = ?";
@@ -2605,9 +2758,10 @@ app.delete(
       SELECT ds.*, c.teacher_id 
       FROM daily_sessions ds
       JOIN courses c ON ds.course_id = c.id
-      WHERE ds.id = ? AND c.teacher_id = ?
+      LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+      WHERE ds.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)
     `,
-        [sessionId, req.user.userId]
+        [req.user.userId, sessionId, req.user.userId, req.user.userId]
       );
 
       if (sessionCheck.length === 0) {
@@ -2682,12 +2836,8 @@ app.post(
       const { courseId } = req.params;
       const { studentId, sessionDate, status, notes } = req.body;
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
-      );
-
-      if (courseCheck.length === 0) {
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
         return res
           .status(404)
           .json({ message: "Course not found or not authorized" });
@@ -2734,6 +2884,13 @@ app.get(
     try {
       const { courseId } = req.params;
       const { date } = req.query;
+
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
+        return res
+          .status(404)
+          .json({ message: "Course not found or not authorized" });
+      }
 
       let query = `
       SELECT 
@@ -2848,12 +3005,8 @@ app.get(
     try {
       const { courseId } = req.params;
 
-      const [courseCheck] = await db.execute(
-        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
-        [courseId, req.user.userId]
-      );
-
-      if (courseCheck.length === 0) {
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
         return res
           .status(404)
           .json({ message: "Course not found or not authorized" });
@@ -2880,6 +3033,220 @@ app.get(
   }
 );
 
+// Sub-teacher management routes
+
+// Add sub-teacher to course
+app.post(
+  "/api/courses/:courseId/sub-teachers",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+      const { teacherEmail } = req.body;
+
+      // Check if user owns the course
+      const [courseCheck] = await db.execute(
+        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
+        [courseId, req.user.userId]
+      );
+
+      if (courseCheck.length === 0) {
+        return res
+          .status(404)
+          .json({ message: "Course not found or not authorized" });
+      }
+
+      // Find teacher by email
+      const [teacher] = await db.execute(
+        'SELECT id, name FROM users WHERE email = ? AND role = "teacher" AND status = "active"',
+        [teacherEmail]
+      );
+
+      if (teacher.length === 0) {
+        return res.status(404).json({ message: "Teacher not found or inactive" });
+      }
+
+      // Check if teacher is already added
+      const [existingSubTeacher] = await db.execute(
+        "SELECT id FROM course_teachers WHERE course_id = ? AND teacher_id = ?",
+        [courseId, teacher[0].id]
+      );
+
+      if (existingSubTeacher.length > 0) {
+        return res.status(400).json({ message: "Teacher is already added to this course" });
+      }
+
+      // Add sub-teacher
+      await db.execute(
+        "INSERT INTO course_teachers (course_id, teacher_id, added_by, role) VALUES (?, ?, ?, 'sub')",
+        [courseId, teacher[0].id, req.user.userId]
+      );
+
+      res.json({
+        message: "Sub-teacher added successfully",
+        teacherName: teacher[0].name
+      });
+    } catch (error) {
+      console.error("Add sub-teacher error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get sub-teachers for a course
+app.get(
+  "/api/courses/:courseId/sub-teachers",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      // Check access (main teacher or sub-teacher)
+      const [accessCheck] = await db.execute(
+        `SELECT 1 FROM courses WHERE id = ? AND teacher_id = ?
+         UNION
+         SELECT 1 FROM course_teachers WHERE course_id = ? AND teacher_id = ?`,
+        [courseId, req.user.userId, courseId, req.user.userId]
+      );
+
+      if (accessCheck.length === 0) {
+        return res.status(403).json({ message: "Not authorized to view sub-teachers" });
+      }
+
+      const [subTeachers] = await db.execute(
+        `SELECT ct.*, u.name, u.email, a.name as added_by_name
+         FROM course_teachers ct
+         JOIN users u ON ct.teacher_id = u.id
+         JOIN users a ON ct.added_by = a.id
+         WHERE ct.course_id = ?
+         ORDER BY ct.added_at DESC`,
+        [courseId]
+      );
+
+      res.json(subTeachers);
+    } catch (error) {
+      console.error("Get sub-teachers error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Remove sub-teacher from course
+app.delete(
+  "/api/courses/:courseId/sub-teachers/:teacherId",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId, teacherId } = req.params;
+
+      // Check if user owns the course
+      const [courseCheck] = await db.execute(
+        "SELECT id FROM courses WHERE id = ? AND teacher_id = ?",
+        [courseId, req.user.userId]
+      );
+
+      if (courseCheck.length === 0) {
+        return res
+          .status(404)
+          .json({ message: "Course not found or not authorized" });
+      }
+
+      await db.execute(
+        "DELETE FROM course_teachers WHERE course_id = ? AND teacher_id = ?",
+        [courseId, teacherId]
+      );
+
+      res.json({ message: "Sub-teacher removed successfully" });
+    } catch (error) {
+      console.error("Remove sub-teacher error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get all active teachers for suggestions
+app.get(
+  "/api/teachers/search",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { q } = req.query; // search query
+
+      let query = `
+        SELECT id, name, email 
+        FROM users 
+        WHERE role = 'teacher' AND status = 'active'
+      `;
+      let params = [];
+
+      if (q) {
+        query += ` AND (name LIKE ? OR email LIKE ?)`;
+        params = [`%${q}%`, `%${q}%`];
+      }
+
+      query += ` ORDER BY name LIMIT 10`;
+
+      const [teachers] = await db.execute(query, params);
+      res.json(teachers);
+    } catch (error) {
+      console.error("Search teachers error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get all active students for suggestions
+app.get(
+  "/api/students/search",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { q, courseId } = req.query; // search query and course ID
+
+      let query = `
+        SELECT u.id, u.name, u.email 
+        FROM users u
+        WHERE u.role = 'student' AND u.status = 'active'
+      `;
+      let params = [];
+
+      // Exclude students already enrolled in the course
+      if (courseId) {
+        query += ` AND u.id NOT IN (
+          SELECT ce.student_id 
+          FROM course_enrollments ce 
+          WHERE ce.course_id = ?
+        )`;
+        params.push(courseId);
+      }
+
+      // Add search filter
+      if (q) {
+        query += ` AND (u.name LIKE ? OR u.email LIKE ?)`;
+        params.push(`%${q}%`, `%${q}%`);
+      }
+
+      query += ` ORDER BY u.name LIMIT 10`;
+
+      const [students] = await db.execute(query, params);
+      res.json(students);
+    } catch (error) {
+      console.error("Search students error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
 app.put(
   "/api/projects/:projectId/verify",
   authenticateToken,
@@ -2895,9 +3262,10 @@ app.put(
       SELECT p.*, c.teacher_id 
       FROM projects p
       JOIN courses c ON p.course_id = c.id
-      WHERE p.id = ? AND c.teacher_id = ?
+      LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+      WHERE p.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)
     `,
-        [projectId, req.user.userId]
+        [req.user.userId, projectId, req.user.userId, req.user.userId]
       );
 
       if (projectCheck.length === 0) {
@@ -2934,57 +3302,107 @@ async function generateCertificate(
   studentName,
   courseName,
   completionDate,
+  courseEndDate,
   filePath,
   certificateCode
 ) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: "A4", layout: "landscape" });
+      const doc = new PDFDocument({
+        size: "A4",
+        layout: "landscape",
+        info: {
+          Title: `Certificate of Completion - ${courseName}`,
+          Author: 'Learning Management System',
+          Subject: 'Course Completion Certificate'
+        }
+      });
       const stream = fs.createWriteStream(filePath);
       doc.pipe(stream);
 
-      doc.rect(50, 50, doc.page.width - 100, doc.page.height - 100).stroke();
+      // Colors
+      const darkBlue = '#2c3e50';
+      const gold = '#f39c12';
+      const lightBlue = '#3498db';
+      const darkGray = '#34495e';
 
-      doc
-        .fontSize(36)
-        .fillColor("#2c3e50")
-        .text("CERTIFICATE OF COMPLETION", 100, 130, { align: "center" });
+      // Certificate border
+      doc.rect(30, 30, doc.page.width - 60, doc.page.height - 60)
+        .lineWidth(3)
+        .stroke(darkBlue);
 
-      doc
-        .fontSize(20)
-        .fillColor("#34495e")
-        .text("This is to certify that", 100, 200, { align: "center" });
+      doc.rect(40, 40, doc.page.width - 80, doc.page.height - 80)
+        .lineWidth(1)
+        .stroke(darkBlue);
 
-      doc
-        .fontSize(32)
-        .fillColor("#e74c3c")
-        .text(studentName, 100, 240, { align: "center" });
+      // Header
+      doc.fontSize(42)
+        .fillColor(darkBlue)
+        .font('Helvetica-Bold')
+        .text("CERTIFICATE", 0, 100, { align: "center" });
 
-      doc
-        .fontSize(20)
-        .fillColor("#34495e")
-        .text("has successfully completed the course", 100, 290, {
-          align: "center",
-        });
+      doc.fontSize(24)
+        .fillColor(gold)
+        .text("OF COMPLETION", 0, 150, { align: "center" });
 
-      doc
-        .fontSize(28)
-        .fillColor("#2980b9")
-        .text(courseName, 100, 330, { align: "center" });
+      // Decorative line
+      doc.moveTo(200, 190)
+        .lineTo(doc.page.width - 200, 190)
+        .lineWidth(2)
+        .stroke(gold);
 
-      doc
-        .fontSize(16)
-        .fillColor("#7f8c8d")
-        .text(`Completion Date: ${completionDate}`, 100, 400, {
-          align: "center",
-        });
+      // Main content
+      doc.fontSize(18)
+        .fillColor(darkGray)
+        .font('Helvetica')
+        .text("This is to certify that", 0, 230, { align: "center" });
 
-      doc
-        .fontSize(12)
-        .fillColor("#95a5a6")
-        .text(`Certificate Code: ${certificateCode}`, 100, 450, {
-          align: "center",
-        });
+      doc.fontSize(36)
+        .fillColor(darkBlue)
+        .font('Helvetica-Bold')
+        .text(studentName, 0, 270, { align: "center" });
+
+      doc.fontSize(18)
+        .fillColor(darkGray)
+        .font('Helvetica')
+        .text("has successfully completed the course", 0, 320, { align: "center" });
+
+      doc.fontSize(28)
+        .fillColor(lightBlue)
+        .font('Helvetica-Bold')
+        .text(courseName, 0, 360, { align: "center", width: doc.page.width });
+
+      // Dates section
+      const dateY = 420;
+      doc.fontSize(14)
+        .fillColor(darkGray)
+        .font('Helvetica');
+
+      if (courseEndDate) {
+        doc.text(`Course Completion Date: ${courseEndDate}`, 0, dateY, { align: "center" });
+        doc.text(`Certificate Issued: ${completionDate}`, 0, dateY + 20, { align: "center" });
+      } else {
+        doc.text(`Completion Date: ${completionDate}`, 0, dateY, { align: "center" });
+      }
+
+      // Certificate code
+      doc.fontSize(12)
+        .fillColor('#7f8c8d')
+        .text(`Certificate Code: ${certificateCode}`, 0, 480, { align: "center" });
+
+      // Footer
+      doc.fontSize(10)
+        .fillColor('#95a5a6')
+        .text("This certificate is digitally generated and verified by Learning Management System", 0, 520, { align: "center" });
+
+      // Signature area (decorative)
+      doc.fontSize(12)
+        .fillColor(darkGray)
+        .text("Authorized Signature", doc.page.width - 200, 460, { align: "center", width: 150 });
+
+      doc.moveTo(doc.page.width - 200, 490)
+        .lineTo(doc.page.width - 50, 490)
+        .stroke(darkGray);
 
       doc.end();
 
@@ -3009,7 +3427,7 @@ async function generateCertificateForProject(studentId, courseId) {
 
     const [details] = await db.execute(
       `
-      SELECT u.name as student_name, c.title as course_name
+      SELECT u.name as student_name, c.title as course_name, c.end_date as course_end_date
       FROM users u, courses c
       WHERE u.id = ? AND c.id = ?
     `,
@@ -3018,8 +3436,9 @@ async function generateCertificateForProject(studentId, courseId) {
 
     if (details.length === 0) return;
 
-    const { student_name, course_name } = details[0];
+    const { student_name, course_name, course_end_date } = details[0];
     const completionDate = new Date().toLocaleDateString();
+    const courseEndDateFormatted = course_end_date ? new Date(course_end_date).toLocaleDateString() : null;
     const certificateFileName = `certificate_${studentId}_${courseId}_${Date.now()}.pdf`;
     const certificatePath = path.join("certificates", certificateFileName);
     const certificateCode = `CERT-${Date.now()}-${studentId}-${courseId}`;
@@ -3028,6 +3447,7 @@ async function generateCertificateForProject(studentId, courseId) {
       student_name,
       course_name,
       completionDate,
+      courseEndDateFormatted,
       certificatePath,
       certificateCode
     );
