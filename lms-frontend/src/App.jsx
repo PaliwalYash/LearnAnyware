@@ -44,6 +44,10 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 
+// Add these imports to your main component file
+import { adsenseManager } from './utils/adsenseManager';
+import { ResponsiveAd, SquareAd, BannerAd } from './components/AdSenseComponents';
+
 const API_BASE = "http://localhost:5002/api";
 
 // Add this component before your main LearningManagementSystem component
@@ -426,56 +430,56 @@ const GoogleAdBanner = ({
   );
 };
 
-// Responsive Ad Component
-const ResponsiveAd = ({ adSlot, className = "" }) => {
-  return (
-    <div className={`my-6 ${className}`}>
-      <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
-        <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
-        <GoogleAdBanner
-          adSlot={adSlot}
-          adFormat="auto"
-          fullWidthResponsive={true}
-          style={{ minHeight: '250px' }}
-        />
-      </div>
-    </div>
-  );
-};
+// // Responsive Ad Component
+// const ResponsiveAd = ({ adSlot, className = "" }) => {
+//   return (
+//     <div className={`my-6 ${className}`}>
+//       <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
+//         <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
+//         <GoogleAdBanner
+//           adSlot={adSlot}
+//           adFormat="auto"
+//           fullWidthResponsive={true}
+//           style={{ minHeight: '250px' }}
+//         />
+//       </div>
+//     </div>
+//   );
+// };
 
-// Square Ad Component
-const SquareAd = ({ adSlot, className = "" }) => {
-  return (
-    <div className={`my-4 ${className}`}>
-      <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
-        <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
-        <GoogleAdBanner
-          adSlot={adSlot}
-          adFormat="rectangle"
-          fullWidthResponsive={false}
-          style={{ width: '300px', height: '250px', margin: '0 auto' }}
-        />
-      </div>
-    </div>
-  );
-};
+// // Square Ad Component
+// const SquareAd = ({ adSlot, className = "" }) => {
+//   return (
+//     <div className={`my-4 ${className}`}>
+//       <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
+//         <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
+//         <GoogleAdBanner
+//           adSlot={adSlot}
+//           adFormat="rectangle"
+//           fullWidthResponsive={false}
+//           style={{ width: '300px', height: '250px', margin: '0 auto' }}
+//         />
+//       </div>
+//     </div>
+//   );
+// };
 
-// Horizontal Banner Ad
-const BannerAd = ({ adSlot, className = "" }) => {
-  return (
-    <div className={`my-6 ${className}`}>
-      <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
-        <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
-        <GoogleAdBanner
-          adSlot={adSlot}
-          adFormat="horizontal"
-          fullWidthResponsive={true}
-          style={{ minHeight: '90px' }}
-        />
-      </div>
-    </div>
-  );
-};
+// // Horizontal Banner Ad
+// const BannerAd = ({ adSlot, className = "" }) => {
+//   return (
+//     <div className={`my-6 ${className}`}>
+//       <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
+//         <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
+//         <GoogleAdBanner
+//           adSlot={adSlot}
+//           adFormat="horizontal"
+//           fullWidthResponsive={true}
+//           style={{ minHeight: '90px' }}
+//         />
+//       </div>
+//     </div>
+//   );
+// };
 
 const LearningManagementSystem = () => {
   const [user, setUser] = useState(null);
@@ -921,30 +925,39 @@ const LearningManagementSystem = () => {
 
   // AdSense API Functions
   const fetchAdsenseConfig = async () => {
-    try {
-      const data = await apiCall("/adsense-config");
-      setAdsConfig(data);
-      setAdsEnabled(data.enabled);
-    } catch (error) {
-      console.error("Fetch AdSense config error:", error);
-      setAdsEnabled(false);
-    }
-  };
+  try {
+    const data = await apiCall("/adsense-config");
+    setAdsConfig(data);
+    setAdsEnabled(data.enabled);
+    adsenseManager.setEnabled(data.enabled);
+  } catch (error) {
+    console.error("Fetch AdSense config error:", error);
+    setAdsEnabled(false);
+    adsenseManager.setEnabled(false);
+  }
+};
 
   const updateAdsenseSettings = async (enabled, testMode) => {
-    try {
-      await apiCall("/admin/adsense-settings", {
-        method: "PUT",
-        body: JSON.stringify({ enabled, testMode }),
-      });
-
-      setAdsConfig(prev => ({ ...prev, enabled, testMode }));
-      setAdsEnabled(enabled);
-      showMessage("AdSense settings updated successfully!", "success");
-    } catch (error) {
-      showMessage(error.message, "error");
+  try {
+    await apiCall("/admin/adsense-settings", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, testMode }),
+    });
+    
+    setAdsConfig(prev => ({ ...prev, enabled, testMode }));
+    setAdsEnabled(enabled);
+    adsenseManager.setEnabled(enabled);
+    
+    showMessage("AdSense settings updated successfully!", "success");
+    
+    // Optionally reload page to apply changes immediately
+    if (!enabled) {
+      adsenseManager.removeScript();
     }
-  };
+  } catch (error) {
+    showMessage(error.message, "error");
+  }
+};
 
   // Add these API functions in your React component
 
@@ -3468,6 +3481,7 @@ const LearningManagementSystem = () => {
                       </React.Fragment>
                     ))}
                   </div>
+
                   {/* Bottom banner ad */}
                   {adsEnabled && blogs.length > 0 && (
                     <BannerAd adSlot="2222222222" />
@@ -6718,12 +6732,6 @@ const LearningManagementSystem = () => {
                             </div>
                           </div>
                         </div>
-                        {/* Ad after every 3 courses */}
-                        {adsEnabled && (index + 1) % 3 === 0 && (
-                          <div className="md:col-span-2 lg:col-span-3">
-                            <BannerAd adSlot="3333333333" />
-                          </div>
-                        )}
                       </div>
                     ))}
                   </div>

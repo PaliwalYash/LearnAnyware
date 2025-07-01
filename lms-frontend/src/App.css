@@ -40,7 +40,6 @@
 .read-the-docs {
   color: #888;
 }
-/* AdSense Styling */
 .ad-container {
   display: flex;
   justify-content: center;
@@ -54,14 +53,12 @@
   background: transparent !important;
 }
 
-/* Responsive ad styling */
 @media (max-width: 768px) {
   .ad-container {
     margin: 0 -1rem;
   }
 }
 
-/* Hide ads in print */
 @media print {
   .ad-container {
     display: none !important;

@@ -3876,11 +3876,13 @@ app.get(
   }
 );
 
+// Add these routes to your server.js file
+
 // Google AdSense Configuration Route
 app.get("/api/adsense-config", authenticateToken, async (req, res) => {
   try {
     const config = {
-      clientId: process.env.GOOGLE_ADSENSE_CLIENT_ID,
+      clientId: process.env.GOOGLE_ADSENSE_CLIENT_ID || "ca-pub-xxxxxxxxxxxxxxxxx",
       enabled: process.env.GOOGLE_ADSENSE_ENABLED === 'true',
       testMode: process.env.ADSENSE_TEST_MODE === 'true'
     };
@@ -3900,7 +3902,7 @@ app.put(
     try {
       const { enabled, testMode } = req.body;
 
-      // In a real application, you'd save this to database
+      // In a production app, you'd save this to database
       // For now, we'll just return success
       res.json({
         message: "AdSense settings updated successfully",
