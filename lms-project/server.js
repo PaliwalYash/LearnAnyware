@@ -2914,7 +2914,7 @@ app.get(
   async (req, res) => {
     try {
       const { page = 1, limit = 10 } = req.query;
-      
+
       // Convert to integers and validate
       const pageNum = Math.max(1, parseInt(page, 10)) || 1;
       const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10))) || 10;
@@ -3871,6 +3871,44 @@ app.get(
       res.json(stats);
     } catch (error) {
       console.error("Dashboard stats error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Google AdSense Configuration Route
+app.get("/api/adsense-config", authenticateToken, async (req, res) => {
+  try {
+    const config = {
+      clientId: process.env.GOOGLE_ADSENSE_CLIENT_ID,
+      enabled: process.env.GOOGLE_ADSENSE_ENABLED === 'true',
+      testMode: process.env.ADSENSE_TEST_MODE === 'true'
+    };
+    res.json(config);
+  } catch (error) {
+    console.error("AdSense config error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Admin route to toggle ads
+app.put(
+  "/api/admin/adsense-settings",
+  authenticateToken,
+  requireRole(["admin"]),
+  async (req, res) => {
+    try {
+      const { enabled, testMode } = req.body;
+
+      // In a real application, you'd save this to database
+      // For now, we'll just return success
+      res.json({
+        message: "AdSense settings updated successfully",
+        enabled,
+        testMode
+      });
+    } catch (error) {
+      console.error("Update AdSense settings error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   }

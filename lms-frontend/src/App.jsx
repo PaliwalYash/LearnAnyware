@@ -387,6 +387,96 @@ const BlogPostCard = ({ blog, user, isLongContent, onEdit, onDelete }) => {
   );
 };
 
+// Google AdSense Banner Component
+const GoogleAdBanner = ({
+  adSlot,
+  adFormat = "auto",
+  fullWidthResponsive = true,
+  style = {},
+  className = ""
+}) => {
+  const [adError, setAdError] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && window.adsbygoogle) {
+        window.adsbygoogle.push({});
+      }
+    } catch (error) {
+      console.error('AdSense error:', error);
+      setAdError(true);
+    }
+  }, []);
+
+  if (adError) {
+    return null; // Don't show anything if ad fails
+  }
+
+  return (
+    <div className={`ad-container ${className}`} style={style}>
+      <ins
+        className="adsbygoogle"
+        style={{ display: 'block', ...style }}
+        data-ad-client="ca-pub-xxxxxxxxxxxxxxxxx" // Replace with your actual client ID
+        data-ad-slot={adSlot}
+        data-ad-format={adFormat}
+        data-full-width-responsive={fullWidthResponsive.toString()}
+      ></ins>
+    </div>
+  );
+};
+
+// Responsive Ad Component
+const ResponsiveAd = ({ adSlot, className = "" }) => {
+  return (
+    <div className={`my-6 ${className}`}>
+      <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
+        <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
+        <GoogleAdBanner
+          adSlot={adSlot}
+          adFormat="auto"
+          fullWidthResponsive={true}
+          style={{ minHeight: '250px' }}
+        />
+      </div>
+    </div>
+  );
+};
+
+// Square Ad Component
+const SquareAd = ({ adSlot, className = "" }) => {
+  return (
+    <div className={`my-4 ${className}`}>
+      <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
+        <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
+        <GoogleAdBanner
+          adSlot={adSlot}
+          adFormat="rectangle"
+          fullWidthResponsive={false}
+          style={{ width: '300px', height: '250px', margin: '0 auto' }}
+        />
+      </div>
+    </div>
+  );
+};
+
+// Horizontal Banner Ad
+const BannerAd = ({ adSlot, className = "" }) => {
+  return (
+    <div className={`my-6 ${className}`}>
+      <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
+        <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
+        <GoogleAdBanner
+          adSlot={adSlot}
+          adFormat="horizontal"
+          fullWidthResponsive={true}
+          style={{ minHeight: '90px' }}
+        />
+      </div>
+    </div>
+  );
+};
+
 const LearningManagementSystem = () => {
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState("login");
@@ -442,6 +532,13 @@ const LearningManagementSystem = () => {
   const [teacherSearchValue, setTeacherSearchValue] = useState("");
   const [studentSearchValue, setStudentSearchValue] = useState("");
 
+  // AdSense Configuration States
+  const [adsEnabled, setAdsEnabled] = useState(false);
+  const [adsConfig, setAdsConfig] = useState({
+    clientId: '',
+    enabled: false,
+    testMode: true
+  });
 
   // Form states
   const [authForm, setAuthForm] = useState({
@@ -820,6 +917,33 @@ const LearningManagementSystem = () => {
       videoUrl: blog.video_url || "",
       blogImage: null,
     });
+  };
+
+  // AdSense API Functions
+  const fetchAdsenseConfig = async () => {
+    try {
+      const data = await apiCall("/adsense-config");
+      setAdsConfig(data);
+      setAdsEnabled(data.enabled);
+    } catch (error) {
+      console.error("Fetch AdSense config error:", error);
+      setAdsEnabled(false);
+    }
+  };
+
+  const updateAdsenseSettings = async (enabled, testMode) => {
+    try {
+      await apiCall("/admin/adsense-settings", {
+        method: "PUT",
+        body: JSON.stringify({ enabled, testMode }),
+      });
+
+      setAdsConfig(prev => ({ ...prev, enabled, testMode }));
+      setAdsEnabled(enabled);
+      showMessage("AdSense settings updated successfully!", "success");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
   };
 
   // Add these API functions in your React component
@@ -1940,6 +2064,7 @@ const LearningManagementSystem = () => {
   const fetchInitialData = async (userData) => {
     try {
       await fetchDashboardStats();
+      await fetchAdsenseConfig();
       await fetchBlogs();
 
       if (userData.role === "admin") {
@@ -2939,6 +3064,11 @@ const LearningManagementSystem = () => {
                 )}
               </div>
 
+              {/* Ad Banner after stats */}
+              {adsEnabled && (
+                <BannerAd adSlot="1234567890" className="mt-6" />
+              )}
+
               {/* Quick Actions */}
               <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
                 <h3 className="text-xl font-semibold text-white mb-4">
@@ -3027,6 +3157,12 @@ const LearningManagementSystem = () => {
                   )}
                 </div>
               </div>
+              {/* Side Ad for larger screens */}
+              {adsEnabled && (
+                <div className="hidden lg:block">
+                  <SquareAd adSlot="0987654321" />
+                </div>
+              )}
             </div>
           )}
 
@@ -3295,24 +3431,47 @@ const LearningManagementSystem = () => {
                 </div>
               ) : (
                 /* Enhanced Blog List - With Read More/Less */
+                // <div className="space-y-6">
+                //   <div className="grid grid-cols-1 gap-6">
+                //     {blogs.map((blog) => {
+                //       const isLongContent = blog.content.length > 500;
+                //       const blogKey = `blog-${blog.id}`;
+
+                //       return (
+                //         <BlogPostCard
+                //           key={blog.id}
+                //           blog={blog}
+                //           user={user}
+                //           isLongContent={isLongContent}
+                //           onEdit={startEditingBlog}
+                //           onDelete={deleteBlog}
+                //         />
+                //       );
+                //     })}
+                //   </div>
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 gap-6">
-                    {blogs.map((blog) => {
-                      const isLongContent = blog.content.length > 500;
-                      const blogKey = `blog-${blog.id}`;
-
-                      return (
+                    {blogs.map((blog, index) => (
+                      <React.Fragment key={blog.id}>
                         <BlogPostCard
-                          key={blog.id}
                           blog={blog}
                           user={user}
-                          isLongContent={isLongContent}
+                          isLongContent={blog.content.length > 500}
                           onEdit={startEditingBlog}
                           onDelete={deleteBlog}
                         />
-                      );
-                    })}
+
+                        {/* Show ad after every 2 blog posts */}
+                        {adsEnabled && (index + 1) % 2 === 0 && index < blogs.length - 1 && (
+                          <ResponsiveAd adSlot="1111111111" />
+                        )}
+                      </React.Fragment>
+                    ))}
                   </div>
+                  {/* Bottom banner ad */}
+                  {adsEnabled && blogs.length > 0 && (
+                    <BannerAd adSlot="2222222222" />
+                  )}
 
                   {/* Enhanced Pagination */}
                   {blogTotalPages > 1 && (
@@ -3638,6 +3797,79 @@ const LearningManagementSystem = () => {
                         <li>✅ Resend functionality</li>
                         <li>✅ Mobile-responsive design</li>
                       </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* Add this to your admin settings section */}
+              {user.role === "admin" && (
+                <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
+                  <h3 className="text-lg font-semibold text-white mb-4">
+                    Google AdSense Settings
+                  </h3>
+
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="text-sm font-medium text-gray-300">
+                          Enable Advertisements
+                        </label>
+                        <p className="text-xs text-gray-500">
+                          Show Google AdSense ads throughout the platform
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => updateAdsenseSettings(!adsConfig.enabled, adsConfig.testMode)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adsConfig.enabled ? 'bg-purple-600' : 'bg-gray-600'
+                          }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adsConfig.enabled ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="text-sm font-medium text-gray-300">
+                          Test Mode
+                        </label>
+                        <p className="text-xs text-gray-500">
+                          Show test ads instead of real ads
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => updateAdsenseSettings(adsConfig.enabled, !adsConfig.testMode)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adsConfig.testMode ? 'bg-yellow-600' : 'bg-gray-600'
+                          }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adsConfig.testMode ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
+                      <h4 className="text-sm font-medium text-white mb-2">Current Configuration</h4>
+                      <div className="space-y-1 text-xs text-gray-400">
+                        <p>Client ID: {adsConfig.clientId || 'Not configured'}</p>
+                        <p>Status: {adsConfig.enabled ? 'Enabled' : 'Disabled'}</p>
+                        <p>Mode: {adsConfig.testMode ? 'Test Mode' : 'Production Mode'}</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-yellow-500/20 border border-yellow-500/30 p-3 rounded-xl">
+                      <div className="flex items-start">
+                        <AlertCircle className="h-4 w-4 text-yellow-400 mr-2 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-yellow-200 text-sm font-medium">Setup Required</p>
+                          <p className="text-yellow-200/80 text-xs">
+                            Replace the client ID in the code with your actual Google AdSense publisher ID
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -6486,6 +6718,12 @@ const LearningManagementSystem = () => {
                             </div>
                           </div>
                         </div>
+                        {/* Ad after every 3 courses */}
+                        {adsEnabled && (index + 1) % 3 === 0 && (
+                          <div className="md:col-span-2 lg:col-span-3">
+                            <BannerAd adSlot="3333333333" />
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
