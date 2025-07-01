@@ -544,6 +544,14 @@ const LearningManagementSystem = () => {
     testMode: true
   });
 
+  // Add these state variables with other useState declarations
+  const [queries, setQueries] = useState([]);
+  const [queryForm, setQueryForm] = useState({
+    question: "",
+  });
+  const [answerForm, setAnswerForm] = useState("");
+  const [selectedQuery, setSelectedQuery] = useState(null);
+
   // Form states
   const [authForm, setAuthForm] = useState({
     name: "",
@@ -650,6 +658,7 @@ const LearningManagementSystem = () => {
       fetchSessions(selectedCourse.id);
       fetchAssignments(selectedCourse.id);
       fetchCourseTeachers(selectedCourse.id);
+      fetchQueries(selectedCourse.id);
       if (user?.role === "teacher") {
         fetchCourseStudents(selectedCourse.id);
         fetchProjects(selectedCourse.id);
@@ -925,39 +934,39 @@ const LearningManagementSystem = () => {
 
   // AdSense API Functions
   const fetchAdsenseConfig = async () => {
-  try {
-    const data = await apiCall("/adsense-config");
-    setAdsConfig(data);
-    setAdsEnabled(data.enabled);
-    adsenseManager.setEnabled(data.enabled);
-  } catch (error) {
-    console.error("Fetch AdSense config error:", error);
-    setAdsEnabled(false);
-    adsenseManager.setEnabled(false);
-  }
-};
+    try {
+      const data = await apiCall("/adsense-config");
+      setAdsConfig(data);
+      setAdsEnabled(data.enabled);
+      adsenseManager.setEnabled(data.enabled);
+    } catch (error) {
+      console.error("Fetch AdSense config error:", error);
+      setAdsEnabled(false);
+      adsenseManager.setEnabled(false);
+    }
+  };
 
   const updateAdsenseSettings = async (enabled, testMode) => {
-  try {
-    await apiCall("/admin/adsense-settings", {
-      method: "PUT",
-      body: JSON.stringify({ enabled, testMode }),
-    });
-    
-    setAdsConfig(prev => ({ ...prev, enabled, testMode }));
-    setAdsEnabled(enabled);
-    adsenseManager.setEnabled(enabled);
-    
-    showMessage("AdSense settings updated successfully!", "success");
-    
-    // Optionally reload page to apply changes immediately
-    if (!enabled) {
-      adsenseManager.removeScript();
+    try {
+      await apiCall("/admin/adsense-settings", {
+        method: "PUT",
+        body: JSON.stringify({ enabled, testMode }),
+      });
+
+      setAdsConfig(prev => ({ ...prev, enabled, testMode }));
+      setAdsEnabled(enabled);
+      adsenseManager.setEnabled(enabled);
+
+      showMessage("AdSense settings updated successfully!", "success");
+
+      // Optionally reload page to apply changes immediately
+      if (!enabled) {
+        adsenseManager.removeScript();
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
     }
-  } catch (error) {
-    showMessage(error.message, "error");
-  }
-};
+  };
 
   // Add these API functions in your React component
 
@@ -1063,6 +1072,73 @@ const LearningManagementSystem = () => {
     } catch (error) {
       console.error("Error fetching chat history:", error);
     }
+  };
+
+  // Query API Functions
+  const fetchQueries = async (courseId) => {
+    try {
+      const data = await apiCall(`/courses/${courseId}/queries`);
+      setQueries(data);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+
+  const submitQuery = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      await apiCall(`/courses/${selectedCourse.id}/queries`, {
+        method: "POST",
+        body: JSON.stringify(queryForm),
+      });
+
+      showMessage("Query submitted successfully!", "success");
+      setQueryForm({ question: "" });
+      fetchQueries(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const answerQuery = async (queryId) => {
+    setLoading(true);
+
+    try {
+      await apiCall(`/queries/${queryId}/answer`, {
+        method: "PUT",
+        body: JSON.stringify({ answer: answerForm }),
+      });
+
+      showMessage("Query answered successfully!", "success");
+      setAnswerForm("");
+      setSelectedQuery(null);
+      fetchQueries(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const deleteQuery = async (queryId) => {
+    if (!window.confirm("Are you sure you want to delete this query?")) return;
+
+    setLoading(true);
+    try {
+      await apiCall(`/queries/${queryId}`, {
+        method: "DELETE",
+      });
+
+      showMessage("Query deleted successfully!", "success");
+      fetchQueries(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+    setLoading(false);
   };
 
   // Add these functions after the existing API functions
@@ -5029,7 +5105,8 @@ const LearningManagementSystem = () => {
                         {[
                           "overview",
                           "sessions",
-                          "assignments", // Add this line
+                          "assignments",
+                          "queries", // Add this line
                           user.role === "teacher" ? "students" : "project",
                           user.role === "teacher" ? "projects" : null,
                           user.role === "teacher" ? "attendance" : null,
@@ -6623,6 +6700,170 @@ const LearningManagementSystem = () => {
                                   </div>
                                   <p className="text-gray-400">
                                     No assignments available yet.
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {/* Queries Tab */}
+                      {activeTab === "queries" && (
+                        <div className="space-y-6">
+                          {/* Submit Query Form for Students */}
+                          {user.role === "student" && (
+                            <div className="border-b border-white/10 pb-6">
+                              <h3 className="text-lg font-semibold text-white mb-4">
+                                Ask a Question
+                              </h3>
+                              <form onSubmit={submitQuery} className="space-y-4">
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                                    Your Question
+                                  </label>
+                                  <textarea
+                                    required
+                                    value={queryForm.question}
+                                    onChange={(e) =>
+                                      setQueryForm({
+                                        ...queryForm,
+                                        question: e.target.value,
+                                      })
+                                    }
+                                    className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    rows="4"
+                                    placeholder="Ask your question here..."
+                                  />
+                                </div>
+                                <button
+                                  type="submit"
+                                  disabled={loading}
+                                  className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                >
+                                  <MessageCircle className="h-4 w-4 mr-2" />
+                                  {loading ? "Submitting..." : "Submit Question"}
+                                </button>
+                              </form>
+                            </div>
+                          )}
+
+                          {/* Queries List */}
+                          <div>
+                            <h3 className="text-lg font-semibold text-white mb-4">
+                              {user.role === "teacher" ? "Student Questions" : "Your Questions"}
+                            </h3>
+                            <div className="space-y-4">
+                              {queries.map((query) => (
+                                <div
+                                  key={query.id}
+                                  className="bg-slate-700/30 rounded-xl p-4 border border-white/10"
+                                >
+                                  <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-3 mb-2">
+                                        <span
+                                          className={`px-3 py-1 rounded-full text-sm font-medium ${query.status === "answered"
+                                              ? "bg-green-500/20 text-green-300 border border-green-500/30"
+                                              : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
+                                            }`}
+                                        >
+                                          {query.status.charAt(0).toUpperCase() + query.status.slice(1)}
+                                        </span>
+                                        {user.role === "teacher" && (
+                                          <span className="text-sm text-gray-400">
+                                            by {query.student_name}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <div className="mb-3">
+                                        <p className="text-sm text-gray-400 mb-1">Question:</p>
+                                        <p className="text-white">{query.question}</p>
+                                        <p className="text-xs text-gray-500 mt-1">
+                                          Asked on {new Date(query.asked_at).toLocaleString()}
+                                        </p>
+                                      </div>
+
+                                      {query.answer && (
+                                        <div className="mt-3 p-3 bg-slate-600/50 rounded-xl">
+                                          <p className="text-sm text-gray-400 mb-1">Answer:</p>
+                                          <p className="text-white">{query.answer}</p>
+                                          <p className="text-xs text-gray-500 mt-1">
+                                            Answered by {query.teacher_name} on{" "}
+                                            {new Date(query.answered_at).toLocaleString()}
+                                          </p>
+                                        </div>
+                                      )}
+
+                                      {/* Answer Form for Teachers */}
+                                      {user.role === "teacher" &&
+                                        query.status === "pending" &&
+                                        selectedQuery === query.id && (
+                                          <div className="mt-3 p-3 bg-slate-600/30 rounded-xl">
+                                            <textarea
+                                              value={answerForm}
+                                              onChange={(e) => setAnswerForm(e.target.value)}
+                                              placeholder="Type your answer here..."
+                                              className="w-full px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm"
+                                              rows="3"
+                                            />
+                                            <div className="flex space-x-2 mt-2">
+                                              <button
+                                                onClick={() => answerQuery(query.id)}
+                                                disabled={loading || !answerForm.trim()}
+                                                className="bg-green-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 transition-colors"
+                                              >
+                                                {loading ? "Answering..." : "Submit Answer"}
+                                              </button>
+                                              <button
+                                                onClick={() => {
+                                                  setSelectedQuery(null);
+                                                  setAnswerForm("");
+                                                }}
+                                                className="bg-gray-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-gray-700 transition-colors"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
+                                    </div>
+
+                                    <div className="flex flex-col space-y-2 ml-4">
+                                      {user.role === "teacher" && query.status === "pending" && (
+                                        <button
+                                          onClick={() => {
+                                            setSelectedQuery(selectedQuery === query.id ? null : query.id);
+                                            setAnswerForm("");
+                                          }}
+                                          className="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center"
+                                        >
+                                          <MessageCircle className="h-3 w-3 mr-1" />
+                                          {selectedQuery === query.id ? "Cancel" : "Answer"}
+                                        </button>
+                                      )}
+
+                                      <button
+                                        onClick={() => deleteQuery(query.id)}
+                                        className="bg-red-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-red-700 transition-colors flex items-center"
+                                      >
+                                        <Trash2 className="h-3 w-3 mr-1" />
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {queries.length === 0 && (
+                                <div className="text-center py-8">
+                                  <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                    <MessageCircle className="h-8 w-8 text-gray-400" />
+                                  </div>
+                                  <p className="text-gray-400">
+                                    {user.role === "teacher"
+                                      ? "No questions from students yet."
+                                      : "You haven't asked any questions yet."}
                                   </p>
                                 </div>
                               )}

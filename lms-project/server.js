@@ -331,6 +331,23 @@ async function createTables() {
   console.log("Blog table created successfully");
 
   console.log("Assignment tables created successfully");
+  // Add this table creation in the createTables() function after other table creations
+  await db.query(`CREATE TABLE IF NOT EXISTS course_queries (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  student_id INT NOT NULL,
+  teacher_id INT NULL,
+  question TEXT NOT NULL,
+  answer TEXT NULL,
+  status ENUM('pending', 'answered') DEFAULT 'pending',
+  asked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  answered_at TIMESTAMP NULL,
+  FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE SET NULL
+)`);
+
+  console.log("Course queries table created successfully");
   // Add missing columns to projects table
   const projectColumns = [{ name: "verified_by", type: "INT NULL" }];
 
@@ -414,6 +431,8 @@ async function createTables() {
 
   console.log("Database tables created successfully");
 }
+
+
 
 // Helper function to check course access (main teacher or sub-teacher)
 const checkCourseAccess = async (courseId, userId) => {
@@ -3911,6 +3930,198 @@ app.put(
       });
     } catch (error) {
       console.error("Update AdSense settings error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Course Query Management Routes
+
+// Submit query (Student)
+app.post(
+  "/api/courses/:courseId/queries",
+  authenticateToken,
+  requireRole(["student"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+      const { question } = req.body;
+
+      if (!question || !question.trim()) {
+        return res.status(400).json({ message: "Question is required" });
+      }
+
+      // Check if student is enrolled
+      const [enrollmentCheck] = await db.execute(
+        "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+        [courseId, req.user.userId]
+      );
+
+      if (enrollmentCheck.length === 0) {
+        return res.status(403).json({ message: "Not enrolled in this course" });
+      }
+
+      const [result] = await db.execute(
+        "INSERT INTO course_queries (course_id, student_id, question) VALUES (?, ?, ?)",
+        [courseId, req.user.userId, question.trim()]
+      );
+
+      res.status(201).json({
+        message: "Query submitted successfully",
+        queryId: result.insertId,
+      });
+    } catch (error) {
+      console.error("Submit query error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get queries for a course
+app.get(
+  "/api/courses/:courseId/queries",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      let query, params;
+
+      if (req.user.role === "student") {
+        // Students can only see their own queries
+        const [enrollmentCheck] = await db.execute(
+          "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+          [courseId, req.user.userId]
+        );
+
+        if (enrollmentCheck.length === 0) {
+          return res.status(403).json({ message: "Not enrolled in this course" });
+        }
+
+        query = `
+          SELECT cq.*, s.name as student_name, t.name as teacher_name
+          FROM course_queries cq
+          JOIN users s ON cq.student_id = s.id
+          LEFT JOIN users t ON cq.teacher_id = t.id
+          WHERE cq.course_id = ? AND cq.student_id = ?
+          ORDER BY cq.asked_at DESC
+        `;
+        params = [courseId, req.user.userId];
+      } else if (req.user.role === "teacher") {
+        // Teachers can see all queries for their courses
+        const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+        if (!hasAccess) {
+          return res.status(403).json({ message: "Not authorized to view queries" });
+        }
+
+        query = `
+          SELECT cq.*, s.name as student_name, s.email as student_email, t.name as teacher_name
+          FROM course_queries cq
+          JOIN users s ON cq.student_id = s.id
+          LEFT JOIN users t ON cq.teacher_id = t.id
+          WHERE cq.course_id = ?
+          ORDER BY cq.status ASC, cq.asked_at DESC
+        `;
+        params = [courseId];
+      } else {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const [queries] = await db.execute(query, params);
+      res.json(queries);
+    } catch (error) {
+      console.error("Get queries error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Answer query (Teacher)
+app.put(
+  "/api/queries/:queryId/answer",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { queryId } = req.params;
+      const { answer } = req.body;
+
+      if (!answer || !answer.trim()) {
+        return res.status(400).json({ message: "Answer is required" });
+      }
+
+      // Check if teacher has access to the course
+      const [queryCheck] = await db.execute(
+        `SELECT cq.*, c.teacher_id 
+         FROM course_queries cq
+         JOIN courses c ON cq.course_id = c.id
+         LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+         WHERE cq.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)`,
+        [req.user.userId, queryId, req.user.userId, req.user.userId]
+      );
+
+      if (queryCheck.length === 0) {
+        return res.status(404).json({ message: "Query not found or not authorized" });
+      }
+
+      await db.execute(
+        "UPDATE course_queries SET answer = ?, teacher_id = ?, status = 'answered', answered_at = NOW() WHERE id = ?",
+        [answer.trim(), req.user.userId, queryId]
+      );
+
+      res.json({ message: "Query answered successfully" });
+    } catch (error) {
+      console.error("Answer query error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Delete query (Student can delete their own, Teacher can delete any in their course)
+app.delete(
+  "/api/queries/:queryId",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { queryId } = req.params;
+
+      if (req.user.role === "student") {
+        // Students can only delete their own queries
+        const [queryCheck] = await db.execute(
+          "SELECT id FROM course_queries WHERE id = ? AND student_id = ?",
+          [queryId, req.user.userId]
+        );
+
+        if (queryCheck.length === 0) {
+          return res.status(404).json({ message: "Query not found or not authorized" });
+        }
+      } else if (req.user.role === "teacher") {
+        // Teachers can delete queries from their courses
+        const [queryCheck] = await db.execute(
+          `SELECT cq.id 
+           FROM course_queries cq
+           JOIN courses c ON cq.course_id = c.id
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+           WHERE cq.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)`,
+          [req.user.userId, queryId, req.user.userId, req.user.userId]
+        );
+
+        if (queryCheck.length === 0) {
+          return res.status(404).json({ message: "Query not found or not authorized" });
+        }
+      } else {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      await db.execute("DELETE FROM course_queries WHERE id = ?", [queryId]);
+
+      res.json({ message: "Query deleted successfully" });
+    } catch (error) {
+      console.error("Delete query error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   }
