@@ -1,10 +1,5 @@
-// Install required package first:
-// npm install nodemailer
-
-// Add these to your existing backend file after the existing imports
 const nodemailer = require('nodemailer');
 require('dotenv').config();
-// Email configuration - Add these environment variables to your .env file
 const emailConfig = {
 //   service: 'gmail', // or 'outlook', 'yahoo', etc.
   host: 'lionelagency.com' ,

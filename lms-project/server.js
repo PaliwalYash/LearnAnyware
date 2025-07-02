@@ -337,14 +337,46 @@ async function createTables() {
   course_id INT NOT NULL,
   student_id INT NOT NULL,
   teacher_id INT NULL,
+  title VARCHAR(255) NOT NULL,
   question TEXT NOT NULL,
   answer TEXT NULL,
-  status ENUM('pending', 'answered') DEFAULT 'pending',
+  priority ENUM('low', 'medium', 'high') DEFAULT 'medium',
+  category ENUM('general', 'assignment', 'technical', 'deadline', 'content') DEFAULT 'general',
+  status ENUM('pending', 'answered', 'closed') DEFAULT 'pending',
+  is_anonymous BOOLEAN DEFAULT FALSE,
+  views INT DEFAULT 0,
+  helpful_votes INT DEFAULT 0,
   asked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   answered_at TIMESTAMP NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
   FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE SET NULL
+  FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_course_status (course_id, status),
+  INDEX idx_course_category (course_id, category)
+)`);
+
+  await db.query(`CREATE TABLE IF NOT EXISTS query_attachments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  query_id INT NOT NULL,
+  filename VARCHAR(255) NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  file_size INT NOT NULL,
+  mime_type VARCHAR(100) NOT NULL,
+  uploaded_by INT NOT NULL,
+  uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (query_id) REFERENCES course_queries(id) ON DELETE CASCADE,
+  FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE CASCADE
+)`);
+
+  await db.query(`CREATE TABLE IF NOT EXISTS query_followers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  query_id INT NOT NULL,
+  user_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (query_id) REFERENCES course_queries(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_follower (query_id, user_id)
 )`);
 
   console.log("Course queries table created successfully");
@@ -3770,6 +3802,7 @@ app.put(
 );
 
 // Dashboard stats
+// Complete Dashboard stats route - Replace the existing one
 app.get(
   "/api/dashboard/stats",
   authenticateToken,
@@ -3791,99 +3824,297 @@ app.get(
         const [certificateCount] = await db.execute(
           "SELECT COUNT(*) as count FROM certificates"
         );
+        
+        // Admin query statistics
+        const [queryStats] = await db.execute(
+          `SELECT 
+            COUNT(*) as total_queries,
+            COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_queries,
+            COUNT(CASE WHEN status = 'answered' THEN 1 END) as answered_queries,
+            COUNT(CASE WHEN priority = 'high' AND status = 'pending' THEN 1 END) as urgent_queries
+           FROM course_queries`
+        );
+
+        // Blog statistics for admin
+        const [blogStats] = await db.execute(
+          "SELECT COUNT(*) as total_blogs FROM blogs"
+        );
+
+        // System statistics
+        const [systemStats] = await db.execute(
+          `SELECT 
+            COUNT(DISTINCT ce.student_id) as active_students,
+            COUNT(DISTINCT ds.id) as total_sessions,
+            COUNT(DISTINCT p.id) as total_projects
+           FROM course_enrollments ce
+           LEFT JOIN daily_sessions ds ON ce.course_id = ds.course_id
+           LEFT JOIN projects p ON ce.course_id = p.course_id AND ce.student_id = p.student_id`
+        );
 
         stats = {
           teachers: teacherCount[0].count,
           students: studentCount[0].count,
           courses: courseCount[0].count,
           certificates: certificateCount[0].count,
+          totalQueries: queryStats[0].total_queries || 0,
+          pendingQueries: queryStats[0].pending_queries || 0,
+          answeredQueries: queryStats[0].answered_queries || 0,
+          urgentQueries: queryStats[0].urgent_queries || 0,
+          totalBlogs: blogStats[0].total_blogs || 0,
+          activeStudents: systemStats[0].active_students || 0,
+          totalSessions: systemStats[0].total_sessions || 0,
+          totalProjects: systemStats[0].total_projects || 0
         };
+
       } else if (req.user.role === "teacher") {
-        const [courseCount] = await db.execute(
+        // Teacher's own courses (main teacher)
+        const [ownCourseCount] = await db.execute(
           "SELECT COUNT(*) as count FROM courses WHERE teacher_id = ?",
           [req.user.userId]
         );
-        const [studentCount] = await db.execute(
-          `
-    SELECT COUNT(DISTINCT ce.student_id) as count 
-    FROM course_enrollments ce 
-    JOIN courses c ON ce.course_id = c.id 
-    WHERE c.teacher_id = ?
-  `,
-          [req.user.userId]
-        );
-        const [sessionCount] = await db.execute(
-          `
-    SELECT COUNT(*) as count 
-    FROM daily_sessions ds 
-    JOIN courses c ON ds.course_id = c.id 
-    WHERE c.teacher_id = ?
-  `,
-          [req.user.userId]
-        );
-        const [projectCount] = await db.execute(
-          `
-    SELECT COUNT(*) as count 
-    FROM projects p 
-    JOIN courses c ON p.course_id = c.id 
-    WHERE c.teacher_id = ? AND p.status = 'submitted'
-  `,
+
+        // Courses where teacher is sub-teacher
+        const [subCourseCount] = await db.execute(
+          "SELECT COUNT(*) as count FROM course_teachers WHERE teacher_id = ?",
           [req.user.userId]
         );
 
-        // Add assignment stats
+        // Total courses (main + sub)
+        const totalCourses = ownCourseCount[0].count + subCourseCount[0].count;
+
+        // Students from all courses (main + sub)
+        const [studentCount] = await db.execute(
+          `SELECT COUNT(DISTINCT ce.student_id) as count 
+           FROM course_enrollments ce 
+           JOIN courses c ON ce.course_id = c.id 
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
+          [req.user.userId, req.user.userId]
+        );
+
+        // Sessions from all courses
+        const [sessionCount] = await db.execute(
+          `SELECT COUNT(*) as count 
+           FROM daily_sessions ds 
+           JOIN courses c ON ds.course_id = c.id 
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
+          [req.user.userId, req.user.userId]
+        );
+
+        // Pending projects from all courses
+        const [projectCount] = await db.execute(
+          `SELECT COUNT(*) as count 
+           FROM projects p 
+           JOIN courses c ON p.course_id = c.id 
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE (c.teacher_id = ? OR ct.teacher_id = ?) AND p.status = 'submitted'`,
+          [req.user.userId, req.user.userId]
+        );
+
+        // Assignment statistics
         const [assignmentCount] = await db.execute(
-          `
-    SELECT COUNT(*) as count 
-    FROM assignments a 
-    JOIN courses c ON a.course_id = c.id 
-    WHERE c.teacher_id = ?
-  `,
-          [req.user.userId]
+          `SELECT COUNT(*) as count 
+           FROM assignments a 
+           JOIN courses c ON a.course_id = c.id 
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
+          [req.user.userId, req.user.userId]
         );
 
         const [pendingAssignmentCount] = await db.execute(
-          `
-    SELECT COUNT(*) as count 
-    FROM assignment_submissions asub
-    JOIN assignments a ON asub.assignment_id = a.id
-    JOIN courses c ON a.course_id = c.id 
-    WHERE c.teacher_id = ? AND asub.status = 'submitted'
-  `,
+          `SELECT COUNT(*) as count 
+           FROM assignment_submissions asub
+           JOIN assignments a ON asub.assignment_id = a.id
+           JOIN courses c ON a.course_id = c.id 
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE (c.teacher_id = ? OR ct.teacher_id = ?) AND asub.status = 'submitted'`,
+          [req.user.userId, req.user.userId]
+        );
+
+        // Query statistics for teacher
+        const [queryStats] = await db.execute(
+          `SELECT 
+            COUNT(*) as total_queries,
+            COUNT(CASE WHEN cq.status = 'pending' THEN 1 END) as pending_queries,
+            COUNT(CASE WHEN cq.status = 'answered' THEN 1 END) as answered_queries,
+            COUNT(CASE WHEN cq.priority = 'high' AND cq.status = 'pending' THEN 1 END) as urgent_queries,
+            COUNT(CASE WHEN DATE(cq.asked_at) = CURDATE() THEN 1 END) as todays_queries,
+            COUNT(CASE WHEN DATE(cq.asked_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 END) as this_week_queries
+           FROM course_queries cq 
+           JOIN courses c ON cq.course_id = c.id 
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
+          [req.user.userId, req.user.userId]
+        );
+
+        // Receipt statistics for teacher
+        const [receiptStats] = await db.execute(
+          `SELECT 
+            COUNT(*) as total_receipts,
+            COALESCE(SUM(total_amount), 0) as total_revenue,
+            COUNT(CASE WHEN DATE(created_at) = CURDATE() THEN 1 END) as todays_receipts
+           FROM payment_receipts 
+           WHERE created_by = ?`,
           [req.user.userId]
         );
 
+        // Blog statistics for teacher
+        const [blogStats] = await db.execute(
+          "SELECT COUNT(*) as my_blogs FROM blogs WHERE author_id = ?",
+          [req.user.userId]
+        );
+
+        // Certificate statistics for teacher's students
+        const [certificateStats] = await db.execute(
+          `SELECT COUNT(DISTINCT cert.id) as certificates_issued
+           FROM certificates cert
+           JOIN courses c ON cert.course_id = c.id
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
+          [req.user.userId, req.user.userId]
+        );
+
         stats = {
-          courses: courseCount[0].count,
+          courses: totalCourses,
+          ownCourses: ownCourseCount[0].count,
+          subCourses: subCourseCount[0].count,
           students: studentCount[0].count,
           sessions: sessionCount[0].count,
           pendingProjects: projectCount[0].count,
           assignments: assignmentCount[0].count,
           pendingAssignments: pendingAssignmentCount[0].count,
+          totalQueries: queryStats[0].total_queries || 0,
+          pendingQueries: queryStats[0].pending_queries || 0,
+          answeredQueries: queryStats[0].answered_queries || 0,
+          urgentQueries: queryStats[0].urgent_queries || 0,
+          todaysQueries: queryStats[0].todays_queries || 0,
+          thisWeekQueries: queryStats[0].this_week_queries || 0,
+          totalReceipts: receiptStats[0].total_receipts || 0,
+          totalRevenue: receiptStats[0].total_revenue || 0,
+          todaysReceipts: receiptStats[0].todays_receipts || 0,
+          myBlogs: blogStats[0].my_blogs || 0,
+          certificatesIssued: certificateStats[0].certificates_issued || 0
         };
+
       } else if (req.user.role === "student") {
         const [enrolledCount] = await db.execute(
           "SELECT COUNT(*) as count FROM course_enrollments WHERE student_id = ?",
           [req.user.userId]
         );
+        
         const [completedCount] = await db.execute(
           "SELECT COUNT(*) as count FROM course_enrollments WHERE student_id = ? AND completed_at IS NOT NULL",
           [req.user.userId]
         );
+        
         const [certificateCount] = await db.execute(
           "SELECT COUNT(*) as count FROM certificates WHERE student_id = ?",
           [req.user.userId]
         );
+        
         const [projectCount] = await db.execute(
           "SELECT COUNT(*) as count FROM projects WHERE student_id = ?",
           [req.user.userId]
         );
+
+        // Student assignment statistics
+        const [assignmentStats] = await db.execute(
+          `SELECT 
+            COUNT(DISTINCT a.id) as available_assignments,
+            COUNT(DISTINCT asub.assignment_id) as submitted_assignments,
+            COUNT(CASE WHEN asub.status = 'approved' THEN 1 END) as approved_assignments,
+            COUNT(CASE WHEN asub.status = 'submitted' THEN 1 END) as pending_assignments
+           FROM assignments a
+           JOIN courses c ON a.course_id = c.id
+           JOIN course_enrollments ce ON c.id = ce.course_id
+           LEFT JOIN assignment_submissions asub ON a.id = asub.assignment_id AND asub.student_id = ?
+           WHERE ce.student_id = ?`,
+          [req.user.userId, req.user.userId]
+        );
+
+        // Student query statistics
+        const [queryStats] = await db.execute(
+          `SELECT 
+            COUNT(*) as my_queries,
+            COUNT(CASE WHEN status = 'answered' THEN 1 END) as answered_queries,
+            COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_queries,
+            COUNT(CASE WHEN priority = 'high' THEN 1 END) as high_priority_queries,
+            COALESCE(SUM(helpful_votes), 0) as total_helpful_votes
+           FROM course_queries 
+           WHERE student_id = ?`,
+          [req.user.userId]
+        );
+
+        // Student attendance statistics
+        const [attendanceStats] = await db.execute(
+          `SELECT 
+            COUNT(*) as total_sessions_attended,
+            COUNT(CASE WHEN sa.status = 'present' THEN 1 END) as present_count,
+            COUNT(CASE WHEN sa.status = 'absent' THEN 1 END) as absent_count,
+            COUNT(CASE WHEN sa.status = 'late' THEN 1 END) as late_count
+           FROM student_attendance sa
+           WHERE sa.student_id = ?`,
+          [req.user.userId]
+        );
+
+        // Student receipt statistics
+        const [receiptStats] = await db.execute(
+          `SELECT 
+            COUNT(*) as my_receipts,
+            COALESCE(SUM(total_amount), 0) as total_paid
+           FROM payment_receipts 
+           WHERE student_id = ?`,
+          [req.user.userId]
+        );
+
+        // Session interaction statistics
+        const [sessionStats] = await db.execute(
+          `SELECT 
+            COUNT(DISTINCT sa.session_id) as total_sessions,
+            COUNT(CASE WHEN sa.marked_read = 1 THEN 1 END) as sessions_read,
+            COUNT(CASE WHEN sa.joined_meet = 1 THEN 1 END) as meetings_joined
+           FROM session_attendance sa
+           JOIN daily_sessions ds ON sa.session_id = ds.id
+           JOIN course_enrollments ce ON ds.course_id = ce.course_id
+           WHERE sa.student_id = ? AND ce.student_id = ?`,
+          [req.user.userId, req.user.userId]
+        );
+
+        // Calculate attendance percentage
+        const attendancePercentage = attendanceStats[0].total_sessions_attended > 0 
+          ? Math.round((attendanceStats[0].present_count / attendanceStats[0].total_sessions_attended) * 100)
+          : 0;
+
+        // Calculate assignment completion percentage
+        const assignmentCompletionPercentage = assignmentStats[0].available_assignments > 0
+          ? Math.round((assignmentStats[0].submitted_assignments / assignmentStats[0].available_assignments) * 100)
+          : 0;
 
         stats = {
           enrolledCourses: enrolledCount[0].count,
           completedCourses: completedCount[0].count,
           certificates: certificateCount[0].count,
           projects: projectCount[0].count,
+          availableAssignments: assignmentStats[0].available_assignments || 0,
+          submittedAssignments: assignmentStats[0].submitted_assignments || 0,
+          approvedAssignments: assignmentStats[0].approved_assignments || 0,
+          pendingAssignments: assignmentStats[0].pending_assignments || 0,
+          assignmentCompletionPercentage: assignmentCompletionPercentage,
+          myQueries: queryStats[0].my_queries || 0,
+          answeredQueries: queryStats[0].answered_queries || 0,
+          pendingQueries: queryStats[0].pending_queries || 0,
+          highPriorityQueries: queryStats[0].high_priority_queries || 0,
+          totalHelpfulVotes: queryStats[0].total_helpful_votes || 0,
+          attendancePercentage: attendancePercentage,
+          presentCount: attendanceStats[0].present_count || 0,
+          absentCount: attendanceStats[0].absent_count || 0,
+          lateCount: attendanceStats[0].late_count || 0,
+          totalSessions: sessionStats[0].total_sessions || 0,
+          sessionsRead: sessionStats[0].sessions_read || 0,
+          meetingsJoined: sessionStats[0].meetings_joined || 0,
+          myReceipts: receiptStats[0].my_receipts || 0,
+          totalPaid: receiptStats[0].total_paid || 0
         };
       }
 
@@ -3943,13 +4174,14 @@ app.post(
   authenticateToken,
   requireRole(["student"]),
   checkUserStatus,
+  upload.array("attachments", 3), // Allow up to 3 attachments
   async (req, res) => {
     try {
       const { courseId } = req.params;
-      const { question } = req.body;
+      const { title, question, priority, category, isAnonymous } = req.body;
 
-      if (!question || !question.trim()) {
-        return res.status(400).json({ message: "Question is required" });
+      if (!title || !title.trim() || !question || !question.trim()) {
+        return res.status(400).json({ message: "Title and question are required" });
       }
 
       // Check if student is enrolled
@@ -3963,13 +4195,43 @@ app.post(
       }
 
       const [result] = await db.execute(
-        "INSERT INTO course_queries (course_id, student_id, question) VALUES (?, ?, ?)",
-        [courseId, req.user.userId, question.trim()]
+        `INSERT INTO course_queries 
+         (course_id, student_id, title, question, priority, category, is_anonymous) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          courseId,
+          req.user.userId,
+          title.trim(),
+          question.trim(),
+          priority || 'medium',
+          category || 'general',
+          isAnonymous === 'true'
+        ]
+      );
+
+      const queryId = result.insertId;
+
+      // Handle file attachments
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          await db.execute(
+            `INSERT INTO query_attachments 
+             (query_id, filename, original_name, file_size, mime_type, uploaded_by) 
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [queryId, file.filename, file.originalname, file.size, file.mimetype, req.user.userId]
+          );
+        }
+      }
+
+      // Auto-follow the query for the student
+      await db.execute(
+        "INSERT INTO query_followers (query_id, user_id) VALUES (?, ?)",
+        [queryId, req.user.userId]
       );
 
       res.status(201).json({
         message: "Query submitted successfully",
-        queryId: result.insertId,
+        queryId: queryId,
       });
     } catch (error) {
       console.error("Submit query error:", error);
@@ -3986,11 +4248,37 @@ app.get(
   async (req, res) => {
     try {
       const { courseId } = req.params;
+      const {
+        status = 'all',
+        category = 'all',
+        priority = 'all',
+        sortBy = 'recent',
+        search = '',
+        page = 1,
+        limit = 10
+      } = req.query;
 
-      let query, params;
+      const pageNum = Math.max(1, parseInt(page, 10));
+      const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10)));
+      const offset = (pageNum - 1) * limitNum;
+
+      let baseQuery = `
+        FROM course_queries cq
+        JOIN users s ON cq.student_id = s.id
+        LEFT JOIN users t ON cq.teacher_id = t.id
+        LEFT JOIN (
+          SELECT query_id, COUNT(*) as attachment_count 
+          FROM query_attachments 
+          GROUP BY query_id
+        ) att ON cq.id = att.query_id
+        WHERE cq.course_id = ?
+      `;
+
+      let params = [courseId];
+      let whereConditions = [];
 
       if (req.user.role === "student") {
-        // Students can only see their own queries
+        // Students can see all queries or their own private ones
         const [enrollmentCheck] = await db.execute(
           "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
           [courseId, req.user.userId]
@@ -4000,37 +4288,116 @@ app.get(
           return res.status(403).json({ message: "Not enrolled in this course" });
         }
 
-        query = `
-          SELECT cq.*, s.name as student_name, t.name as teacher_name
-          FROM course_queries cq
-          JOIN users s ON cq.student_id = s.id
-          LEFT JOIN users t ON cq.teacher_id = t.id
-          WHERE cq.course_id = ? AND cq.student_id = ?
-          ORDER BY cq.asked_at DESC
-        `;
-        params = [courseId, req.user.userId];
+        whereConditions.push("(cq.is_anonymous = FALSE OR cq.student_id = ?)");
+        params.push(req.user.userId);
       } else if (req.user.role === "teacher") {
-        // Teachers can see all queries for their courses
         const hasAccess = await checkCourseAccess(courseId, req.user.userId);
         if (!hasAccess) {
           return res.status(403).json({ message: "Not authorized to view queries" });
         }
-
-        query = `
-          SELECT cq.*, s.name as student_name, s.email as student_email, t.name as teacher_name
-          FROM course_queries cq
-          JOIN users s ON cq.student_id = s.id
-          LEFT JOIN users t ON cq.teacher_id = t.id
-          WHERE cq.course_id = ?
-          ORDER BY cq.status ASC, cq.asked_at DESC
-        `;
-        params = [courseId];
       } else {
         return res.status(403).json({ message: "Access denied" });
       }
 
-      const [queries] = await db.execute(query, params);
-      res.json(queries);
+      // Add filters
+      if (status !== 'all') {
+        whereConditions.push("cq.status = ?");
+        params.push(status);
+      }
+
+      if (category !== 'all') {
+        whereConditions.push("cq.category = ?");
+        params.push(category);
+      }
+
+      if (priority !== 'all') {
+        whereConditions.push("cq.priority = ?");
+        params.push(priority);
+      }
+
+      if (search) {
+        whereConditions.push("(cq.title LIKE ? OR cq.question LIKE ?)");
+        params.push(`%${search}%`, `%${search}%`);
+      }
+
+      if (whereConditions.length > 0) {
+        baseQuery += " AND " + whereConditions.join(" AND ");
+      }
+
+      // Sorting
+      let orderBy = "ORDER BY ";
+      switch (sortBy) {
+        case 'oldest':
+          orderBy += "cq.asked_at ASC";
+          break;
+        case 'priority':
+          orderBy += "FIELD(cq.priority, 'high', 'medium', 'low'), cq.asked_at DESC";
+          break;
+        case 'popular':
+          orderBy += "cq.helpful_votes DESC, cq.views DESC";
+          break;
+        case 'unanswered':
+          orderBy += "cq.status = 'pending' DESC, cq.asked_at DESC";
+          break;
+        default: // recent
+          orderBy += "cq.asked_at DESC";
+      }
+
+      const selectQuery = `
+        SELECT cq.*, 
+               CASE 
+                 WHEN cq.is_anonymous = TRUE AND cq.student_id != ? THEN 'Anonymous Student'
+                 ELSE s.name 
+               END as student_name,
+               CASE 
+                 WHEN cq.is_anonymous = TRUE AND cq.student_id != ? THEN NULL
+                 ELSE s.email 
+               END as student_email,
+               t.name as teacher_name,
+               COALESCE(att.attachment_count, 0) as attachment_count
+        ${baseQuery} 
+        ${orderBy}
+        LIMIT ${limitNum} OFFSET ${offset}
+      `;
+
+      const countQuery = `SELECT COUNT(*) as total ${baseQuery}`;
+
+      // Add user ID for anonymous check
+      const queryParams = [req.user.userId, req.user.userId, ...params];
+      const countParams = [...params];
+
+      const [queries] = await db.execute(selectQuery, queryParams);
+      const [totalCount] = await db.execute(countQuery, countParams);
+
+      // Get attachments for each query
+      for (let query of queries) {
+        const [attachments] = await db.execute(
+          `SELECT id, original_name, filename, file_size, mime_type, uploaded_at 
+           FROM query_attachments 
+           WHERE query_id = ?`,
+          [query.id]
+        );
+        query.attachments = attachments;
+
+        // Check if current user is following this query
+        if (req.user.role === "student") {
+          const [isFollowing] = await db.execute(
+            "SELECT id FROM query_followers WHERE query_id = ? AND user_id = ?",
+            [query.id, req.user.userId]
+          );
+          query.isFollowing = isFollowing.length > 0;
+        }
+      }
+
+      res.json({
+        queries,
+        pagination: {
+          total: totalCount[0].total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(totalCount[0].total / limitNum)
+        }
+      });
     } catch (error) {
       console.error("Get queries error:", error);
       res.status(500).json({ message: "Internal server error" });
@@ -4047,7 +4414,7 @@ app.put(
   async (req, res) => {
     try {
       const { queryId } = req.params;
-      const { answer } = req.body;
+      const { answer, closeQuery } = req.body;
 
       if (!answer || !answer.trim()) {
         return res.status(400).json({ message: "Answer is required" });
@@ -4067,14 +4434,287 @@ app.put(
         return res.status(404).json({ message: "Query not found or not authorized" });
       }
 
+      const newStatus = closeQuery ? 'closed' : 'answered';
+
       await db.execute(
-        "UPDATE course_queries SET answer = ?, teacher_id = ?, status = 'answered', answered_at = NOW() WHERE id = ?",
-        [answer.trim(), req.user.userId, queryId]
+        `UPDATE course_queries 
+         SET answer = ?, teacher_id = ?, status = ?, answered_at = NOW() 
+         WHERE id = ?`,
+        [answer.trim(), req.user.userId, newStatus, queryId]
       );
 
-      res.json({ message: "Query answered successfully" });
+      res.json({ 
+        message: closeQuery ? "Query answered and closed successfully" : "Query answered successfully"
+      });
     } catch (error) {
       console.error("Answer query error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+app.put(
+  "/api/queries/:queryId/status",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { queryId } = req.params;
+      const { status } = req.body;
+
+      if (!['pending', 'answered', 'closed'].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+
+      let authorized = false;
+
+      if (req.user.role === "student") {
+        // Students can only change status of their own queries
+        const [queryCheck] = await db.execute(
+          "SELECT id FROM course_queries WHERE id = ? AND student_id = ?",
+          [queryId, req.user.userId]
+        );
+        authorized = queryCheck.length > 0;
+      } else if (req.user.role === "teacher") {
+        // Teachers can change status of queries in their courses
+        const [queryCheck] = await db.execute(
+          `SELECT cq.id 
+           FROM course_queries cq
+           JOIN courses c ON cq.course_id = c.id
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+           WHERE cq.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)`,
+          [req.user.userId, queryId, req.user.userId, req.user.userId]
+        );
+        authorized = queryCheck.length > 0;
+      }
+
+      if (!authorized) {
+        return res.status(404).json({ message: "Query not found or not authorized" });
+      }
+
+      await db.execute(
+        "UPDATE course_queries SET status = ? WHERE id = ?",
+        [status, queryId]
+      );
+
+      res.json({ message: "Query status updated successfully" });
+    } catch (error) {
+      console.error("Update query status error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+app.post(
+  "/api/queries/:queryId/helpful",
+  authenticateToken,
+  requireRole(["student"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { queryId } = req.params;
+
+      // Check if student has access to the query
+      const [queryCheck] = await db.execute(
+        `SELECT cq.course_id 
+         FROM course_queries cq
+         JOIN course_enrollments ce ON cq.course_id = ce.course_id
+         WHERE cq.id = ? AND ce.student_id = ?`,
+        [queryId, req.user.userId]
+      );
+
+      if (queryCheck.length === 0) {
+        return res.status(404).json({ message: "Query not found or not accessible" });
+      }
+
+      await db.execute(
+        "UPDATE course_queries SET helpful_votes = helpful_votes + 1 WHERE id = ?",
+        [queryId]
+      );
+
+      res.json({ message: "Marked as helpful" });
+    } catch (error) {
+      console.error("Mark helpful error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Follow/Unfollow query
+app.post(
+  "/api/queries/:queryId/follow",
+  authenticateToken,
+  requireRole(["student"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { queryId } = req.params;
+
+      // Check if student has access to the query
+      const [queryCheck] = await db.execute(
+        `SELECT cq.course_id 
+         FROM course_queries cq
+         JOIN course_enrollments ce ON cq.course_id = ce.course_id
+         WHERE cq.id = ? AND ce.student_id = ?`,
+        [queryId, req.user.userId]
+      );
+
+      if (queryCheck.length === 0) {
+        return res.status(404).json({ message: "Query not found or not accessible" });
+      }
+
+      // Check if already following
+      const [existing] = await db.execute(
+        "SELECT id FROM query_followers WHERE query_id = ? AND user_id = ?",
+        [queryId, req.user.userId]
+      );
+
+      if (existing.length > 0) {
+        // Unfollow
+        await db.execute(
+          "DELETE FROM query_followers WHERE query_id = ? AND user_id = ?",
+          [queryId, req.user.userId]
+        );
+        res.json({ message: "Unfollowed query", following: false });
+      } else {
+        // Follow
+        await db.execute(
+          "INSERT INTO query_followers (query_id, user_id) VALUES (?, ?)",
+          [queryId, req.user.userId]
+        );
+        res.json({ message: "Following query", following: true });
+      }
+    } catch (error) {
+      console.error("Follow query error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+app.get(
+  "/api/courses/:courseId/query-stats",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+
+      const [stats] = await db.execute(
+        `SELECT 
+          COUNT(*) as total_queries,
+          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_queries,
+          COUNT(CASE WHEN status = 'answered' THEN 1 END) as answered_queries,
+          COUNT(CASE WHEN status = 'closed' THEN 1 END) as closed_queries,
+          COUNT(CASE WHEN priority = 'high' THEN 1 END) as high_priority_count,
+          AVG(CASE WHEN answered_at IS NOT NULL 
+              THEN TIMESTAMPDIFF(HOUR, asked_at, answered_at) 
+              END) as avg_response_time_hours,
+          COALESCE(SUM(views), 0) as total_views,
+          COALESCE(SUM(helpful_votes), 0) as total_helpful_votes
+         FROM course_queries 
+         WHERE course_id = ?`,
+        [courseId]
+      );
+
+      const [categoryStats] = await db.execute(
+        `SELECT category, COUNT(*) as count 
+         FROM course_queries 
+         WHERE course_id = ? 
+         GROUP BY category
+         ORDER BY count DESC`,
+        [courseId]
+      );
+
+      res.json({
+        ...stats[0],
+        categoryBreakdown: categoryStats
+      });
+    } catch (error) {
+      console.error("Get query stats error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+app.get(
+  "/api/queries/:queryId",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { queryId } = req.params;
+
+      const [query] = await db.execute(
+        `SELECT cq.*, 
+                CASE 
+                  WHEN cq.is_anonymous = TRUE AND cq.student_id != ? THEN 'Anonymous Student'
+                  ELSE s.name 
+                END as student_name,
+                CASE 
+                  WHEN cq.is_anonymous = TRUE AND cq.student_id != ? THEN NULL
+                  ELSE s.email 
+                END as student_email,
+                t.name as teacher_name,
+                c.title as course_title
+         FROM course_queries cq
+         JOIN users s ON cq.student_id = s.id
+         LEFT JOIN users t ON cq.teacher_id = t.id
+         JOIN courses c ON cq.course_id = c.id
+         WHERE cq.id = ?`,
+        [req.user.userId, req.user.userId, queryId]
+      );
+
+      if (query.length === 0) {
+        return res.status(404).json({ message: "Query not found" });
+      }
+
+      const queryData = query[0];
+
+      // Check access permissions
+      if (req.user.role === "student") {
+        const [enrollmentCheck] = await db.execute(
+          "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+          [queryData.course_id, req.user.userId]
+        );
+
+        if (enrollmentCheck.length === 0) {
+          return res.status(403).json({ message: "Not enrolled in this course" });
+        }
+
+        if (queryData.is_anonymous && queryData.student_id !== req.user.userId) {
+          // Can view anonymous queries but not identify the student
+        }
+      } else if (req.user.role === "teacher") {
+        const hasAccess = await checkCourseAccess(queryData.course_id, req.user.userId);
+        if (!hasAccess) {
+          return res.status(403).json({ message: "Not authorized to view this query" });
+        }
+      }
+
+      // Get attachments
+      const [attachments] = await db.execute(
+        `SELECT id, original_name, filename, file_size, mime_type, uploaded_at 
+         FROM query_attachments 
+         WHERE query_id = ?`,
+        [queryId]
+      );
+      queryData.attachments = attachments;
+
+      // Increment view count (only once per user per session)
+      await db.execute(
+        "UPDATE course_queries SET views = views + 1 WHERE id = ?",
+        [queryId]
+      );
+
+      res.json(queryData);
+    } catch (error) {
+      console.error("Get query details error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   }
