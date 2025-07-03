@@ -383,7 +383,9 @@ async function createTables() {
   course_id INT NOT NULL,
   title VARCHAR(255) NOT NULL,
   description TEXT,
-  video_file VARCHAR(255) NOT NULL,
+  video_file VARCHAR(255) NULL,
+  youtube_url VARCHAR(500) NULL,
+  video_type ENUM('file', 'youtube') DEFAULT 'file',
   duration INT DEFAULT NULL,
   order_index INT DEFAULT 0,
   uploaded_by INT NOT NULL,
@@ -4226,6 +4228,64 @@ app.delete(
 
 // Video Management Routes
 
+// Add YouTube video (Teacher only)
+app.post(
+  "/api/courses/:courseId/videos/youtube",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+      const { title, description, youtubeUrl, orderIndex } = req.body;
+
+      if (!title || !youtubeUrl) {
+        return res.status(400).json({ message: "Title and YouTube URL are required" });
+      }
+
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
+        return res.status(404).json({ message: "Course not found or not authorized" });
+      }
+
+      // Validate YouTube URL
+      const youtubeRegex = /^(https?\:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
+      if (!youtubeRegex.test(youtubeUrl)) {
+        return res.status(400).json({ message: "Invalid YouTube URL" });
+      }
+
+      // Extract video ID for validation
+      let videoId = null;
+      try {
+        const url = new URL(youtubeUrl);
+        if (url.hostname === 'youtu.be') {
+          videoId = url.pathname.slice(1);
+        } else if (url.hostname.includes('youtube.com')) {
+          videoId = url.searchParams.get('v');
+        }
+        
+        if (!videoId) {
+          return res.status(400).json({ message: "Could not extract video ID from YouTube URL" });
+        }
+      } catch (error) {
+        return res.status(400).json({ message: "Invalid YouTube URL format" });
+      }
+
+      const [result] = await db.execute(
+        "INSERT INTO course_videos (course_id, title, description, youtube_url, video_type, order_index, uploaded_by) VALUES (?, ?, ?, ?, 'youtube', ?, ?)",
+        [courseId, title, description || null, youtubeUrl, orderIndex || 0, req.user.userId]
+      );
+
+      res.status(201).json({
+        message: "YouTube video added successfully",
+        videoId: result.insertId,
+      });
+    } catch (error) {
+      console.error("YouTube video add error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
 // Upload video (Teacher only)
 app.post(
   "/api/courses/:courseId/videos",
@@ -4264,7 +4324,7 @@ app.post(
   }
 );
 
-// Get course videos
+// Update the existing get videos route to handle both types
 app.get(
   "/api/courses/:courseId/videos",
   authenticateToken,
@@ -4308,14 +4368,16 @@ app.get(
 
       const [videos] = await db.execute(query, [courseId]);
 
-      // For students, add watch progress
+      // For students, add watch progress (only for uploaded videos, not YouTube)
       if (req.user.role === "student") {
         for (let video of videos) {
-          const [progress] = await db.execute(
-            "SELECT * FROM video_watch_progress WHERE video_id = ? AND student_id = ?",
-            [video.id, req.user.userId]
-          );
-          video.progress = progress[0] || null;
+          if (video.video_type === 'file') {
+            const [progress] = await db.execute(
+              "SELECT * FROM video_watch_progress WHERE video_id = ? AND student_id = ?",
+              [video.id, req.user.userId]
+            );
+            video.progress = progress[0] || null;
+          }
         }
       }
 
@@ -4602,6 +4664,7 @@ app.post(
 );
 
 // Delete video (Teacher only)
+// Update delete video route to handle both types
 app.delete(
   "/api/videos/:videoId",
   authenticateToken,
@@ -4626,10 +4689,12 @@ app.delete(
 
       const video = videoCheck[0];
 
-      // Delete the video file
-      const videoPath = path.join("uploads/videos", video.video_file);
-      if (fs.existsSync(videoPath)) {
-        fs.unlinkSync(videoPath);
+      // Delete the video file only if it's a file upload
+      if (video.video_type === 'file' && video.video_file) {
+        const videoPath = path.join("uploads/videos", video.video_file);
+        if (fs.existsSync(videoPath)) {
+          fs.unlinkSync(videoPath);
+        }
       }
 
       await db.execute("DELETE FROM course_videos WHERE id = ?", [videoId]);

@@ -636,7 +636,13 @@ const LearningManagementSystem = () => {
     videoFile: null,
   });
   const [videoProgress, setVideoProgress] = useState({});
-
+  const [youtubeForm, setYoutubeForm] = useState({
+    title: "",
+    description: "",
+    youtubeUrl: "",
+    orderIndex: 0,
+  });
+  const [videoType, setVideoType] = useState("file");
   // AdSense Configuration States
   const [adsEnabled, setAdsEnabled] = useState(false);
   const [adsConfig, setAdsConfig] = useState({
@@ -1099,6 +1105,45 @@ const LearningManagementSystem = () => {
     }
 
     setLoading(false);
+  };
+  // Add YouTube video function
+  const addYoutubeVideo = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const data = await apiCall(`/courses/${selectedCourse.id}/videos/youtube`, {
+        method: "POST",
+        body: JSON.stringify(youtubeForm),
+      });
+
+      showMessage("YouTube video added successfully!", "success");
+      setYoutubeForm({
+        title: "",
+        description: "",
+        youtubeUrl: "",
+        orderIndex: 0,
+      });
+      fetchVideos(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const getYouTubeVideoId = (url) => {
+    try {
+      const urlObj = new URL(url);
+      if (urlObj.hostname === 'youtu.be') {
+        return urlObj.pathname.slice(1);
+      } else if (urlObj.hostname.includes('youtube.com')) {
+        return urlObj.searchParams.get('v');
+      }
+    } catch (error) {
+      console.error('Invalid URL:', error);
+    }
+    return null;
   };
 
   const updateVideoProgress = async (videoId, watchedSeconds, totalDuration) => {
@@ -3210,32 +3255,13 @@ const LearningManagementSystem = () => {
       )}
       {selectedVideo && (
         <div className="fixed inset-0 bg-black/95 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-slate-800/95 backdrop-blur-md rounded-2xl w-full max-w-4xl h-[600px] border border-white/20 flex flex-col"
-            style={{
-              userSelect: 'none',
-              WebkitUserSelect: 'none',
-              MozUserSelect: 'none',
-              msUserSelect: 'none',
-              WebkitTouchCallout: 'none',
-              WebkitUserDrag: 'none',
-              KhtmlUserSelect: 'none'
-            }}>
-
-            {/* Security Warning - Updated to show immediate closure */}
-            <div className="bg-red-500/20 border border-red-500/50 p-3 rounded-t-2xl">
-              <p className="text-red-300 text-sm text-center font-medium">
-                🛡️ SECURITY NOTICE: Any attempt to screenshot, record, or access developer tools will immediately close this video.
-              </p>
-              <p className="text-red-200 text-xs text-center mt-1">
-                Current violations: {securityViolations} | Video will auto-close on first violation
-              </p>
-            </div>
+          <div className="bg-slate-800/95 backdrop-blur-md rounded-2xl w-full max-w-4xl h-[600px] border border-white/20 flex flex-col">
 
             {/* Video Header */}
             <div className="p-4 border-b border-white/10 flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-white">
-                  🔒 {selectedVideo.title}
+                  {selectedVideo.video_type === 'youtube' ? '📺' : '🔒'} {selectedVideo.title}
                 </h3>
                 {selectedVideo.description && (
                   <p className="text-sm text-gray-400">
@@ -3254,133 +3280,118 @@ const LearningManagementSystem = () => {
               </button>
             </div>
 
-            {/* Secure Video Container */}
+            {/* Video Player Container */}
             <div className="flex-1 p-4">
-              <div
-                className="w-full h-full bg-black rounded-xl overflow-hidden relative video-security-container"
-                style={{
-                  userSelect: 'none',
-                  WebkitUserSelect: 'none',
-                  MozUserSelect: 'none',
-                  msUserSelect: 'none',
-                  WebkitTouchCallout: 'none',
-                  position: 'relative'
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setSecurityViolations(prev => {
-                    const newCount = prev + 1;
-                    showMessage("Right-click detected - Video closed", "error");
-                    setSelectedVideo(null);
-                    setSecurityViolations(0);
-                    return 0;
-                  });
-                  return false;
-                }}
-                onDragStart={(e) => {
-                  e.preventDefault();
-                  setSecurityViolations(prev => {
-                    const newCount = prev + 1;
-                    showMessage("Drag attempt detected - Video closed", "error");
-                    setSelectedVideo(null);
-                    setSecurityViolations(0);
-                    return 0;
-                  });
-                  return false;
-                }}
-              >
-                {/* Video Element with Enhanced Security */}
-                <video
-                  key={selectedVideo.id}
-                  className="w-full h-full object-contain"
-                  controls
-                  controlsList="nodownload nofullscreen noremoteplaybook noplaybackrate"
-                  disablePictureInPicture
-                  disableRemotePlayback
-                  playsInline
-                  onTimeUpdate={(e) => {
-                    if (user?.role === "student") {
-                      updateVideoProgress(
-                        selectedVideo.id,
-                        Math.floor(e.target.currentTime),
-                        Math.floor(e.target.duration)
-                      );
-                    }
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    showMessage("Right-click on video detected - Video closed", "error");
-                    setSelectedVideo(null);
-                    setSecurityViolations(0);
-                    return false;
-                  }}
-                  onLoadStart={() => {
-                    // Add watermark when video loads
-                    const videoElement = document.querySelector('video');
-                    if (videoElement && user) {
-                      addWatermark(videoElement, user.name, user.email);
-                    }
-                  }}
-                  style={{
-                    pointerEvents: 'auto',
-                    userSelect: 'none',
-                    WebkitUserSelect: 'none',
-                    MozUserSelect: 'none',
-                    msUserSelect: 'none'
-                  }}
-                >
-                  <source
-                    src={`${API_BASE}/videos/${selectedVideo.id}/stream?token=${localStorage.getItem("token")}`}
-                    type="video/mp4"
+              <div className="w-full h-full bg-black rounded-xl overflow-hidden relative">
+                {selectedVideo.video_type === 'youtube' ? (
+                  /* YouTube Player */
+                  <iframe
+                    src={`https://www.youtube.com/embed/${getYouTubeVideoId(selectedVideo.youtube_url)}?rel=0&modestbranding=1&controls=1`}
+                    title={selectedVideo.title}
+                    className="w-full h-full"
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
                   />
-                  Your browser does not support the video tag.
-                </video>
+                ) : (
+                  /* Secure File Player */
+                  <div
+                    className="w-full h-full video-security-container"
+                    style={{
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none',
+                      MozUserSelect: 'none',
+                      msUserSelect: 'none',
+                      WebkitTouchCallout: 'none',
+                      position: 'relative'
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      showMessage("Right-click detected - Video closed", "error");
+                      setSelectedVideo(null);
+                      setSecurityViolations(0);
+                      return false;
+                    }}
+                  >
+                    {/* Security Notice for File Videos */}
+                    <div className="absolute top-2 left-2 bg-red-500/20 border border-red-500/50 px-2 py-1 rounded text-xs text-red-300 z-20">
+                      🛡️ Protected Content
+                    </div>
 
-                {/* Security Overlay */}
-                <div
-                  className="absolute inset-0 pointer-events-none"
-                  style={{
-                    background: 'transparent',
-                    userSelect: 'none',
-                    WebkitUserSelect: 'none',
-                    MozUserSelect: 'none',
-                    msUserSelect: 'none',
-                    zIndex: 10
-                  }}
-                />
+                    <video
+                      key={selectedVideo.id}
+                      className="w-full h-full object-contain"
+                      controls
+                      controlsList="nodownload nofullscreen noremoteplaybook noplaybackrate"
+                      disablePictureInPicture
+                      disableRemotePlayback
+                      playsInline
+                      onTimeUpdate={(e) => {
+                        if (user?.role === "student") {
+                          updateVideoProgress(
+                            selectedVideo.id,
+                            Math.floor(e.target.currentTime),
+                            Math.floor(e.target.duration)
+                          );
+                        }
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        showMessage("Right-click on video detected - Video closed", "error");
+                        setSelectedVideo(null);
+                        setSecurityViolations(0);
+                        return false;
+                      }}
+                      style={{
+                        pointerEvents: 'auto',
+                        userSelect: 'none',
+                        WebkitUserSelect: 'none',
+                        MozUserSelect: 'none',
+                        msUserSelect: 'none'
+                      }}
+                    >
+                      <source
+                        src={`${API_BASE}/videos/${selectedVideo.id}/stream?token=${localStorage.getItem("token")}`}
+                        type="video/mp4"
+                      />
+                      Your browser does not support the video tag.
+                    </video>
 
-                {/* Dynamic Watermark */}
-                <div
-                  className="absolute top-4 right-4 pointer-events-none text-white/40 text-xs font-mono bg-black/30 px-2 py-1 rounded"
-                  style={{ zIndex: 15 }}
-                >
-                  {user?.name} | {new Date().toLocaleString()}
-                </div>
+                    {/* Watermarks for File Videos */}
+                    <div
+                      className="absolute top-4 right-4 pointer-events-none text-white/40 text-xs font-mono bg-black/30 px-2 py-1 rounded"
+                      style={{ zIndex: 15 }}
+                    >
+                      {user?.name} | {new Date().toLocaleString()}
+                    </div>
 
-                {/* Moving Security Notice */}
-                <div
-                  className="absolute text-white/20 text-xs pointer-events-none moving-watermark"
-                  style={{
-                    zIndex: 12,
-                    animation: 'moveWatermark 10s linear infinite'
-                  }}
-                >
-                  🔒 Protected Content - {user?.email}
-                </div>
+                    <div
+                      className="absolute text-white/20 text-xs pointer-events-none moving-watermark"
+                      style={{
+                        zIndex: 12,
+                        animation: 'moveWatermark 10s linear infinite'
+                      }}
+                    >
+                      🔒 Protected Content - {user?.email}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Video Info */}
             <div className="p-4 border-t border-white/10">
               <div className="flex justify-between items-center text-sm text-gray-400">
-                <span>Uploaded by: {selectedVideo.uploaded_by_name}</span>
+                <span>Added by: {selectedVideo.uploaded_by_name}</span>
                 <span>
                   {new Date(selectedVideo.created_at).toLocaleDateString()}
                 </span>
               </div>
-              {user.role === "student" && videoProgress[selectedVideo.id] && (
+
+              {/* Progress bar only for file videos */}
+              {selectedVideo.video_type === 'file' && user.role === "student" && videoProgress[selectedVideo.id] && (
                 <div className="mt-3">
                   <div className="flex justify-between text-xs text-gray-400 mb-1">
                     <span>Your Progress</span>
@@ -3396,6 +3407,12 @@ const LearningManagementSystem = () => {
                       }}
                     ></div>
                   </div>
+                </div>
+              )}
+
+              {selectedVideo.video_type === 'youtube' && (
+                <div className="mt-2 text-xs text-gray-500">
+                  Note: YouTube videos are played through YouTube's secure player
                 </div>
               )}
             </div>
@@ -7529,94 +7546,210 @@ const LearningManagementSystem = () => {
                       )}
                       {activeTab === "videos" && (
                         <div className="space-y-6">
-                          {/* Video Upload Form for Teachers */}
+                          {/* Video Upload/Add Form for Teachers */}
                           {user.role === "teacher" && (
                             <div className="border-b border-white/10 pb-6">
-                              <h3 className="text-lg font-semibold text-white mb-4">
-                                Upload Video
-                              </h3>
-                              <form onSubmit={uploadVideo} className="space-y-4">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="flex items-center space-x-4 mb-4">
+                                <h3 className="text-lg font-semibold text-white">
+                                  Add Video
+                                </h3>
+                                <div className="flex bg-slate-700/30 rounded-xl p-1">
+                                  <button
+                                    onClick={() => setVideoType("file")}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${videoType === "file"
+                                      ? "bg-purple-500 text-white"
+                                      : "text-gray-300 hover:text-white"
+                                      }`}
+                                  >
+                                    Upload File
+                                  </button>
+                                  <button
+                                    onClick={() => setVideoType("youtube")}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${videoType === "youtube"
+                                      ? "bg-red-500 text-white"
+                                      : "text-gray-300 hover:text-white"
+                                      }`}
+                                  >
+                                    YouTube Link
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* File Upload Form */}
+                              {videoType === "file" && (
+                                <form onSubmit={uploadVideo} className="space-y-4">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                                        Video Title *
+                                      </label>
+                                      <input
+                                        type="text"
+                                        required
+                                        value={videoForm.title}
+                                        onChange={(e) =>
+                                          setVideoForm({
+                                            ...videoForm,
+                                            title: e.target.value,
+                                          })
+                                        }
+                                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                        placeholder="Video title"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                                        Order Index
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={videoForm.orderIndex}
+                                        onChange={(e) =>
+                                          setVideoForm({
+                                            ...videoForm,
+                                            orderIndex: parseInt(e.target.value) || 0,
+                                          })
+                                        }
+                                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                        placeholder="0"
+                                      />
+                                    </div>
+                                  </div>
                                   <div>
                                     <label className="block text-sm font-medium text-gray-300 mb-2">
-                                      Video Title *
+                                      Description
+                                    </label>
+                                    <textarea
+                                      value={videoForm.description}
+                                      onChange={(e) =>
+                                        setVideoForm({
+                                          ...videoForm,
+                                          description: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                      rows="3"
+                                      placeholder="Video description"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Video File * (MP4, AVI, MOV, WMV, WebM - Max 500MB)
                                     </label>
                                     <input
-                                      type="text"
+                                      type="file"
                                       required
-                                      value={videoForm.title}
                                       onChange={(e) =>
                                         setVideoForm({
                                           ...videoForm,
-                                          title: e.target.value,
+                                          videoFile: e.target.files[0],
                                         })
                                       }
                                       className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
-                                      placeholder="Video title"
+                                      accept="video/*"
                                     />
+                                  </div>
+                                  <button
+                                    type="submit"
+                                    disabled={loading}
+                                    className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                  >
+                                    <Upload className="h-4 w-4 mr-2" />
+                                    {loading ? "Uploading..." : "Upload Video"}
+                                  </button>
+                                </form>
+                              )}
+
+                              {/* YouTube Link Form */}
+                              {videoType === "youtube" && (
+                                <form onSubmit={addYoutubeVideo} className="space-y-4">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                                        Video Title *
+                                      </label>
+                                      <input
+                                        type="text"
+                                        required
+                                        value={youtubeForm.title}
+                                        onChange={(e) =>
+                                          setYoutubeForm({
+                                            ...youtubeForm,
+                                            title: e.target.value,
+                                          })
+                                        }
+                                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white"
+                                        placeholder="Video title"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                                        Order Index
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={youtubeForm.orderIndex}
+                                        onChange={(e) =>
+                                          setYoutubeForm({
+                                            ...youtubeForm,
+                                            orderIndex: parseInt(e.target.value) || 0,
+                                          })
+                                        }
+                                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white"
+                                        placeholder="0"
+                                      />
+                                    </div>
                                   </div>
                                   <div>
                                     <label className="block text-sm font-medium text-gray-300 mb-2">
-                                      Order Index
+                                      YouTube URL *
                                     </label>
                                     <input
-                                      type="number"
-                                      min="0"
-                                      value={videoForm.orderIndex}
+                                      type="url"
+                                      required
+                                      value={youtubeForm.youtubeUrl}
                                       onChange={(e) =>
-                                        setVideoForm({
-                                          ...videoForm,
-                                          orderIndex: parseInt(e.target.value) || 0,
+                                        setYoutubeForm({
+                                          ...youtubeForm,
+                                          youtubeUrl: e.target.value,
                                         })
                                       }
-                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
-                                      placeholder="0"
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white"
+                                      placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">
+                                      Supports both youtube.com and youtu.be URLs
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Description
+                                    </label>
+                                    <textarea
+                                      value={youtubeForm.description}
+                                      onChange={(e) =>
+                                        setYoutubeForm({
+                                          ...youtubeForm,
+                                          description: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white"
+                                      rows="3"
+                                      placeholder="Video description"
                                     />
                                   </div>
-                                </div>
-                                <div>
-                                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                                    Description
-                                  </label>
-                                  <textarea
-                                    value={videoForm.description}
-                                    onChange={(e) =>
-                                      setVideoForm({
-                                        ...videoForm,
-                                        description: e.target.value,
-                                      })
-                                    }
-                                    className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
-                                    rows="3"
-                                    placeholder="Video description"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                                    Video File * (MP4, AVI, MOV, WMV, WebM - Max 500MB)
-                                  </label>
-                                  <input
-                                    type="file"
-                                    required
-                                    onChange={(e) =>
-                                      setVideoForm({
-                                        ...videoForm,
-                                        videoFile: e.target.files[0],
-                                      })
-                                    }
-                                    className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
-                                    accept="video/*"
-                                  />
-                                </div>
-                                <button
-                                  type="submit"
-                                  disabled={loading}
-                                  className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center"
-                                >
-                                  <Upload className="h-4 w-4 mr-2" />
-                                  {loading ? "Uploading..." : "Upload Video"}
-                                </button>
-                              </form>
+                                  <button
+                                    type="submit"
+                                    disabled={loading}
+                                    className="bg-gradient-to-r from-red-500 to-red-600 text-white px-6 py-3 rounded-xl hover:from-red-600 hover:to-red-700 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                  >
+                                    <ExternalLink className="h-4 w-4 mr-2" />
+                                    {loading ? "Adding..." : "Add YouTube Video"}
+                                  </button>
+                                </form>
+                              )}
                             </div>
                           )}
 
@@ -7640,7 +7773,13 @@ const LearningManagementSystem = () => {
                                         <span className="text-xs text-gray-400 bg-slate-600/50 px-2 py-1 rounded">
                                           #{index + 1}
                                         </span>
-                                        {user.role === "student" && videoProgress[video.id]?.completed && (
+                                        <span className={`text-xs px-2 py-1 rounded border ${video.video_type === 'youtube'
+                                          ? 'bg-red-500/20 text-red-300 border-red-500/30'
+                                          : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                                          }`}>
+                                          {video.video_type === 'youtube' ? 'YouTube' : 'File'}
+                                        </span>
+                                        {user.role === "student" && video.video_type === 'file' && videoProgress[video.id]?.completed && (
                                           <span className="text-xs text-green-300 bg-green-500/20 px-2 py-1 rounded border border-green-500/30">
                                             Completed
                                           </span>
@@ -7654,9 +7793,14 @@ const LearningManagementSystem = () => {
                                       <div className="text-sm text-gray-400 space-y-1">
                                         <p>Uploaded by: {video.uploaded_by_name}</p>
                                         <p>
-                                          Uploaded: {new Date(video.created_at).toLocaleDateString()}
+                                          Added: {new Date(video.created_at).toLocaleDateString()}
                                         </p>
-                                        {user.role === "student" && videoProgress[video.id] && (
+                                        {video.video_type === 'youtube' && (
+                                          <p className="text-red-400">
+                                            YouTube: {video.youtube_url}
+                                          </p>
+                                        )}
+                                        {user.role === "student" && video.video_type === 'file' && videoProgress[video.id] && (
                                           <div className="mt-2">
                                             <div className="flex justify-between text-xs text-gray-400 mb-1">
                                               <span>Progress</span>
@@ -7682,7 +7826,7 @@ const LearningManagementSystem = () => {
                                         className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors flex items-center"
                                       >
                                         <Eye className="h-4 w-4 mr-1" />
-                                        Play
+                                        {video.video_type === 'youtube' ? 'Watch' : 'Play'}
                                       </button>
                                       {user.role === "teacher" && (
                                         <button
@@ -7703,7 +7847,7 @@ const LearningManagementSystem = () => {
                                     <FileText className="h-8 w-8 text-gray-400" />
                                   </div>
                                   <p className="text-gray-400">
-                                    No videos uploaded yet.
+                                    No videos added yet.
                                   </p>
                                 </div>
                               )}
