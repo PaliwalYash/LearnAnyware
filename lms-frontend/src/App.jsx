@@ -44,6 +44,96 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 
+// Add the CSS constant here:
+const videoSecurityStyles = `
+  .video-security-container {
+    -webkit-touch-callout: none !important;
+    -webkit-user-select: none !important;
+    -khtml-user-select: none !important;
+    -moz-user-select: none !important;
+    -ms-user-select: none !important;
+    user-select: none !important;
+    -webkit-user-drag: none !important;
+    -khtml-user-drag: none !important;
+    -moz-user-drag: none !important;
+    -o-user-drag: none !important;
+    user-drag: none !important;
+  }
+
+  video {
+    -webkit-touch-callout: none !important;
+    -webkit-user-select: none !important;
+    -khtml-user-select: none !important;
+    -moz-user-select: none !important;
+    -ms-user-select: none !important;
+    user-select: none !important;
+    -webkit-user-drag: none !important;
+    pointer-events: auto !important;
+  }
+
+  video::-webkit-media-controls-download-button {
+    display: none !important;
+  }
+  
+  video::-webkit-media-controls-fullscreen-button {
+    display: none !important;
+  }
+  
+  video::-webkit-media-controls-picture-in-picture-button {
+    display: none !important;
+  }
+  
+  video::-webkit-media-controls-enclosure {
+    overflow: hidden !important;
+  }
+
+  video::-webkit-media-controls-panel {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+  }
+  
+  @media print {
+    video, .video-security-container {
+      display: none !important;
+      visibility: hidden !important;
+    }
+  }
+  
+  @keyframes moveWatermark {
+    0% { top: 10%; left: 10%; }
+    25% { top: 10%; left: 80%; }
+    50% { top: 80%; left: 80%; }
+    75% { top: 80%; left: 10%; }
+    100% { top: 10%; left: 10%; }
+  }
+  
+  .moving-watermark {
+    animation: moveWatermark 15s linear infinite;
+  }
+
+  /* Disable screenshot functionality */
+  .video-security-container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: transparent;
+    z-index: 999;
+    pointer-events: none;
+  }
+
+  /* Disable text selection globally when video is playing */
+  body.video-playing {
+    -webkit-touch-callout: none !important;
+    -webkit-user-select: none !important;
+    -khtml-user-select: none !important;
+    -moz-user-select: none !important;
+    -ms-user-select: none !important;
+    user-select: none !important;
+  }
+`;
+
 // Add these imports to your main component file
 import { adsenseManager } from './utils/adsenseManager';
 import { ResponsiveAd, SquareAd, BannerAd } from './components/AdSenseComponents';
@@ -536,6 +626,17 @@ const LearningManagementSystem = () => {
   const [teacherSearchValue, setTeacherSearchValue] = useState("");
   const [studentSearchValue, setStudentSearchValue] = useState("");
 
+  // Add these state variables with other useState declarations
+  const [videos, setVideos] = useState([]);
+  const [selectedVideo, setSelectedVideo] = useState(null);
+  const [videoForm, setVideoForm] = useState({
+    title: "",
+    description: "",
+    orderIndex: 0,
+    videoFile: null,
+  });
+  const [videoProgress, setVideoProgress] = useState({});
+
   // AdSense Configuration States
   const [adsEnabled, setAdsEnabled] = useState(false);
   const [adsConfig, setAdsConfig] = useState({
@@ -659,6 +760,7 @@ const LearningManagementSystem = () => {
       fetchAssignments(selectedCourse.id);
       fetchCourseTeachers(selectedCourse.id);
       fetchQueries(selectedCourse.id);
+      fetchVideos(selectedCourse.id);
       if (user?.role === "teacher") {
         fetchCourseStudents(selectedCourse.id);
         fetchProjects(selectedCourse.id);
@@ -670,6 +772,225 @@ const LearningManagementSystem = () => {
       }
     }
   }, [selectedCourse, user]);
+
+  // Add this useEffect to disable developer tools and screenshots
+  // Add these additional security hooks at the top of your component
+  const [isDevToolsOpen, setIsDevToolsOpen] = useState(false);
+  const [securityViolations, setSecurityViolations] = useState(0);
+
+  // Enhanced security useEffect
+  // Enhanced security useEffect - Close video after 1 violation
+  useEffect(() => {
+    if (selectedVideo) {
+      let devToolsChecker;
+
+      // Function to handle security violation
+      const handleSecurityViolation = (message) => {
+        setSecurityViolations(prev => {
+          const newCount = prev + 1;
+          showMessage(message, "error");
+
+          // Close video immediately after first violation
+          if (newCount >= 1) {
+            setSelectedVideo(null);
+            setSecurityViolations(0);
+            showMessage("Video closed due to security violation", "error");
+          }
+
+          return newCount;
+        });
+      };
+
+      // Advanced DevTools detection
+      const detectDevTools = () => {
+        const threshold = 160;
+        const widthThreshold = window.outerWidth - window.innerWidth > threshold;
+        const heightThreshold = window.outerHeight - window.innerHeight > threshold;
+
+        if (widthThreshold || heightThreshold) {
+          if (!isDevToolsOpen) {
+            setIsDevToolsOpen(true);
+            handleSecurityViolation("Developer tools detected - Video closed for security");
+          }
+        } else {
+          setIsDevToolsOpen(false);
+        }
+      };
+
+      // Advanced keyboard blocking
+      const handleKeyDown = (e) => {
+        const blockedKeys = [
+          'F12', 'F11', // Function keys
+          'PrintScreen', 'Insert', // Screenshot keys
+          'ContextMenu', // Context menu key
+        ];
+
+        const blockedCombinations = [
+          { ctrl: true, shift: true, key: 'I' }, // DevTools
+          { ctrl: true, shift: true, key: 'C' }, // DevTools
+          { ctrl: true, shift: true, key: 'J' }, // Console
+          { ctrl: true, key: 'U' }, // View source
+          { ctrl: true, key: 'S' }, // Save
+          { ctrl: true, key: 'P' }, // Print
+          { ctrl: true, key: 'A' }, // Select all
+          { ctrl: true, key: 'C' }, // Copy
+          { ctrl: true, key: 'V' }, // Paste
+          { ctrl: true, key: 'X' }, // Cut
+          { alt: true, key: 'F4' }, // Alt+F4
+          { meta: true, alt: true, key: 'I' }, // Mac DevTools
+          { meta: true, key: 'S' }, // Mac Save
+          { meta: true, key: 'P' }, // Mac Print
+        ];
+
+        // Block individual keys
+        if (blockedKeys.includes(e.key)) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleSecurityViolation(`Blocked key detected: ${e.key}`);
+          return false;
+        }
+
+        // Block key combinations
+        for (const combo of blockedCombinations) {
+          if (
+            (combo.ctrl === undefined || combo.ctrl === e.ctrlKey) &&
+            (combo.shift === undefined || combo.shift === e.shiftKey) &&
+            (combo.alt === undefined || combo.alt === e.altKey) &&
+            (combo.meta === undefined || combo.meta === e.metaKey) &&
+            e.key === combo.key
+          ) {
+            e.preventDefault();
+            e.stopPropagation();
+            handleSecurityViolation(`Blocked key combination: ${combo.ctrl ? 'Ctrl+' : ''}${combo.shift ? 'Shift+' : ''}${combo.alt ? 'Alt+' : ''}${combo.meta ? 'Cmd+' : ''}${combo.key}`);
+            return false;
+          }
+        }
+      };
+
+      // Disable right-click globally
+      const handleContextMenu = (e) => {
+        e.preventDefault();
+        handleSecurityViolation("Right-click detected");
+        return false;
+      };
+
+      // Detect window focus changes (potential screen recording)
+      const handleVisibilityChange = () => {
+        if (document.hidden) {
+          const videoElement = document.querySelector('video');
+          if (videoElement) {
+            videoElement.pause();
+            videoElement.style.filter = 'blur(20px)';
+            videoElement.style.opacity = '0.3';
+          }
+          // Don't count this as a violation, just pause
+          showMessage("Video paused - window not in focus", "warning");
+        } else {
+          const videoElement = document.querySelector('video');
+          if (videoElement) {
+            videoElement.style.filter = 'none';
+            videoElement.style.opacity = '1';
+          }
+        }
+      };
+
+      // Detect window resize (potential screen recording software)
+      const handleResize = () => {
+        detectDevTools();
+      };
+
+      // Block text selection
+      const handleSelectStart = (e) => {
+        e.preventDefault();
+        handleSecurityViolation("Text selection attempt detected");
+        return false;
+      };
+
+      // Block drag operations
+      const handleDragStart = (e) => {
+        e.preventDefault();
+        handleSecurityViolation("Drag operation detected");
+        return false;
+      };
+
+      // Advanced screenshot detection (PrintScreen key)
+      const handleKeyUp = (e) => {
+        if (e.key === 'PrintScreen') {
+          handleSecurityViolation("Screenshot attempt detected");
+        }
+      };
+
+      // Detect developer tools using console
+      const detectDevToolsConsole = () => {
+        let devtools = {
+          open: false,
+          orientation: null
+        };
+
+        const threshold = 160;
+        setInterval(() => {
+          if (window.outerHeight - window.innerHeight > threshold ||
+            window.outerWidth - window.innerWidth > threshold) {
+            if (!devtools.open) {
+              devtools.open = true;
+              handleSecurityViolation("Developer tools opened");
+            }
+          } else {
+            devtools.open = false;
+          }
+        }, 500);
+      };
+
+      // Start DevTools detection
+      devToolsChecker = setInterval(detectDevTools, 500);
+      detectDevToolsConsole();
+
+      // Add all event listeners with capture phase for better detection
+      document.addEventListener('keydown', handleKeyDown, true);
+      document.addEventListener('keyup', handleKeyUp, true);
+      document.addEventListener('contextmenu', handleContextMenu, true);
+      document.addEventListener('selectstart', handleSelectStart, true);
+      document.addEventListener('dragstart', handleDragStart, true);
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      window.addEventListener('resize', handleResize);
+      window.addEventListener('blur', handleVisibilityChange);
+
+      // Disable browser's built-in screenshot capability
+      document.body.style.userSelect = 'none';
+      document.body.style.webkitUserSelect = 'none';
+      document.body.style.mozUserSelect = 'none';
+      document.body.style.msUserSelect = 'none';
+
+      // Additional security: Detect if user switches tabs frequently (potential recording)
+      let tabSwitchCount = 0;
+      const handleFocus = () => {
+        tabSwitchCount++;
+        if (tabSwitchCount > 3) { // More than 3 tab switches
+          handleSecurityViolation("Suspicious tab switching detected");
+        }
+      };
+      window.addEventListener('focus', handleFocus);
+
+      return () => {
+        clearInterval(devToolsChecker);
+        document.removeEventListener('keydown', handleKeyDown, true);
+        document.removeEventListener('keyup', handleKeyUp, true);
+        document.removeEventListener('contextmenu', handleContextMenu, true);
+        document.removeEventListener('selectstart', handleSelectStart, true);
+        document.removeEventListener('dragstart', handleDragStart, true);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('resize', handleResize);
+        window.removeEventListener('blur', handleVisibilityChange);
+        window.removeEventListener('focus', handleFocus);
+
+        // Restore normal functionality
+        document.body.style.userSelect = '';
+        document.body.style.webkitUserSelect = '';
+        document.body.style.mozUserSelect = '';
+        document.body.style.msUserSelect = '';
+      };
+    }
+  }, [selectedVideo, isDevToolsOpen]);
 
   const deleteReceipt = async (receiptId) => {
     setLoading(true);
@@ -713,6 +1034,115 @@ const LearningManagementSystem = () => {
     }
 
     return data;
+  };
+
+  // Add these API functions after existing API functions
+
+  const fetchVideos = async (courseId) => {
+    try {
+      const data = await apiCall(`/courses/${courseId}/videos`);
+      setVideos(data);
+
+      // Set progress for students
+      if (user?.role === "student") {
+        const progressMap = {};
+        data.forEach(video => {
+          if (video.progress) {
+            progressMap[video.id] = video.progress;
+          }
+        });
+        setVideoProgress(progressMap);
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+
+  const uploadVideo = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const formData = new FormData();
+      Object.keys(videoForm).forEach((key) => {
+        if (videoForm[key] !== null && videoForm[key] !== "") {
+          formData.append(key, videoForm[key]);
+        }
+      });
+
+      const response = await fetch(
+        `${API_BASE}/courses/${selectedCourse.id}/videos`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+          body: formData,
+        }
+      );
+
+      const data = await response.json();
+      if (response.ok) {
+        showMessage("Video uploaded successfully!", "success");
+        setVideoForm({
+          title: "",
+          description: "",
+          orderIndex: 0,
+          videoFile: null,
+        });
+        fetchVideos(selectedCourse.id);
+      } else {
+        throw new Error(data.message);
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+
+    setLoading(false);
+  };
+
+  const updateVideoProgress = async (videoId, watchedSeconds, totalDuration) => {
+    if (user?.role !== "student") return;
+
+    try {
+      await apiCall(`/videos/${videoId}/progress`, {
+        method: "POST",
+        body: JSON.stringify({ watchedSeconds, totalDuration }),
+      });
+    } catch (error) {
+      console.error("Update progress error:", error);
+    }
+  };
+
+  const deleteVideo = async (videoId) => {
+    if (!window.confirm("Are you sure you want to delete this video?")) return;
+
+    setLoading(true);
+    try {
+      await apiCall(`/videos/${videoId}`, {
+        method: "DELETE",
+      });
+
+      showMessage("Video deleted successfully!", "success");
+      fetchVideos(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+    setLoading(false);
+  };
+
+  const addWatermark = (videoElement, userName, userEmail) => {
+    // This is a placeholder for more advanced watermarking
+    // In a real implementation, you'd want server-side watermarking
+    const watermarkInterval = setInterval(() => {
+      const watermarks = document.querySelectorAll('.moving-watermark');
+      watermarks.forEach(watermark => {
+        watermark.textContent = `🔒 ${userName} | ${userEmail} | ${new Date().toLocaleTimeString()}`;
+      });
+    }, 1000);
+
+    videoElement.addEventListener('ended', () => clearInterval(watermarkInterval));
+    videoElement.addEventListener('pause', () => clearInterval(watermarkInterval));
   };
 
   // API Functions
@@ -2303,6 +2733,7 @@ const LearningManagementSystem = () => {
   // Main Dashboard
   return (
     <div className="min-h-screen bg-slate-900">
+      <style dangerouslySetInnerHTML={{ __html: videoSecurityStyles }} />
       {/* Header */}
       <header className="bg-slate-800/50 backdrop-blur-md border-b border-white/10 sticky top-0 z-40">
         <div className="px-4 sm:px-6 lg:px-8">
@@ -2777,6 +3208,200 @@ const LearningManagementSystem = () => {
           </div>
         </div>
       )}
+      {selectedVideo && (
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-slate-800/95 backdrop-blur-md rounded-2xl w-full max-w-4xl h-[600px] border border-white/20 flex flex-col"
+            style={{
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              MozUserSelect: 'none',
+              msUserSelect: 'none',
+              WebkitTouchCallout: 'none',
+              WebkitUserDrag: 'none',
+              KhtmlUserSelect: 'none'
+            }}>
+
+            {/* Security Warning - Updated to show immediate closure */}
+            <div className="bg-red-500/20 border border-red-500/50 p-3 rounded-t-2xl">
+              <p className="text-red-300 text-sm text-center font-medium">
+                🛡️ SECURITY NOTICE: Any attempt to screenshot, record, or access developer tools will immediately close this video.
+              </p>
+              <p className="text-red-200 text-xs text-center mt-1">
+                Current violations: {securityViolations} | Video will auto-close on first violation
+              </p>
+            </div>
+
+            {/* Video Header */}
+            <div className="p-4 border-b border-white/10 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  🔒 {selectedVideo.title}
+                </h3>
+                {selectedVideo.description && (
+                  <p className="text-sm text-gray-400">
+                    {selectedVideo.description}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedVideo(null);
+                  setSecurityViolations(0);
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Secure Video Container */}
+            <div className="flex-1 p-4">
+              <div
+                className="w-full h-full bg-black rounded-xl overflow-hidden relative video-security-container"
+                style={{
+                  userSelect: 'none',
+                  WebkitUserSelect: 'none',
+                  MozUserSelect: 'none',
+                  msUserSelect: 'none',
+                  WebkitTouchCallout: 'none',
+                  position: 'relative'
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSecurityViolations(prev => {
+                    const newCount = prev + 1;
+                    showMessage("Right-click detected - Video closed", "error");
+                    setSelectedVideo(null);
+                    setSecurityViolations(0);
+                    return 0;
+                  });
+                  return false;
+                }}
+                onDragStart={(e) => {
+                  e.preventDefault();
+                  setSecurityViolations(prev => {
+                    const newCount = prev + 1;
+                    showMessage("Drag attempt detected - Video closed", "error");
+                    setSelectedVideo(null);
+                    setSecurityViolations(0);
+                    return 0;
+                  });
+                  return false;
+                }}
+              >
+                {/* Video Element with Enhanced Security */}
+                <video
+                  key={selectedVideo.id}
+                  className="w-full h-full object-contain"
+                  controls
+                  controlsList="nodownload nofullscreen noremoteplaybook noplaybackrate"
+                  disablePictureInPicture
+                  disableRemotePlayback
+                  playsInline
+                  onTimeUpdate={(e) => {
+                    if (user?.role === "student") {
+                      updateVideoProgress(
+                        selectedVideo.id,
+                        Math.floor(e.target.currentTime),
+                        Math.floor(e.target.duration)
+                      );
+                    }
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showMessage("Right-click on video detected - Video closed", "error");
+                    setSelectedVideo(null);
+                    setSecurityViolations(0);
+                    return false;
+                  }}
+                  onLoadStart={() => {
+                    // Add watermark when video loads
+                    const videoElement = document.querySelector('video');
+                    if (videoElement && user) {
+                      addWatermark(videoElement, user.name, user.email);
+                    }
+                  }}
+                  style={{
+                    pointerEvents: 'auto',
+                    userSelect: 'none',
+                    WebkitUserSelect: 'none',
+                    MozUserSelect: 'none',
+                    msUserSelect: 'none'
+                  }}
+                >
+                  <source
+                    src={`${API_BASE}/videos/${selectedVideo.id}/stream?token=${localStorage.getItem("token")}`}
+                    type="video/mp4"
+                  />
+                  Your browser does not support the video tag.
+                </video>
+
+                {/* Security Overlay */}
+                <div
+                  className="absolute inset-0 pointer-events-none"
+                  style={{
+                    background: 'transparent',
+                    userSelect: 'none',
+                    WebkitUserSelect: 'none',
+                    MozUserSelect: 'none',
+                    msUserSelect: 'none',
+                    zIndex: 10
+                  }}
+                />
+
+                {/* Dynamic Watermark */}
+                <div
+                  className="absolute top-4 right-4 pointer-events-none text-white/40 text-xs font-mono bg-black/30 px-2 py-1 rounded"
+                  style={{ zIndex: 15 }}
+                >
+                  {user?.name} | {new Date().toLocaleString()}
+                </div>
+
+                {/* Moving Security Notice */}
+                <div
+                  className="absolute text-white/20 text-xs pointer-events-none moving-watermark"
+                  style={{
+                    zIndex: 12,
+                    animation: 'moveWatermark 10s linear infinite'
+                  }}
+                >
+                  🔒 Protected Content - {user?.email}
+                </div>
+              </div>
+            </div>
+
+            {/* Video Info */}
+            <div className="p-4 border-t border-white/10">
+              <div className="flex justify-between items-center text-sm text-gray-400">
+                <span>Uploaded by: {selectedVideo.uploaded_by_name}</span>
+                <span>
+                  {new Date(selectedVideo.created_at).toLocaleDateString()}
+                </span>
+              </div>
+              {user.role === "student" && videoProgress[selectedVideo.id] && (
+                <div className="mt-3">
+                  <div className="flex justify-between text-xs text-gray-400 mb-1">
+                    <span>Your Progress</span>
+                    <span>
+                      {Math.round((videoProgress[selectedVideo.id].watched_seconds / videoProgress[selectedVideo.id].total_duration) * 100)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-600 rounded-full h-2">
+                    <div
+                      className="bg-purple-500 h-2 rounded-full"
+                      style={{
+                        width: `${Math.round((videoProgress[selectedVideo.id].watched_seconds / videoProgress[selectedVideo.id].total_duration) * 100)}%`
+                      }}
+                    ></div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex">
         {/* Sidebar */}
@@ -3084,6 +3709,21 @@ const LearningManagementSystem = () => {
                         </div>
                       </div>
                     </div>
+                    <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10 hover:border-red-500/30 transition-all duration-200">
+                      <div className="flex items-center">
+                        <div className="h-12 w-12 bg-gradient-to-r from-red-400 to-red-600 rounded-xl flex items-center justify-center">
+                          <FileText className="h-6 w-6 text-white" />
+                        </div>
+                        <div className="ml-4">
+                          <p className="text-sm font-medium text-gray-400">
+                            Videos
+                          </p>
+                          <p className="text-2xl font-bold text-white">
+                            {dashboardStats.videos || 0}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                   </>
                 )}
 
@@ -3145,6 +3785,21 @@ const LearningManagementSystem = () => {
                           </p>
                           <p className="text-2xl font-bold text-white">
                             {dashboardStats.projects || 0}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10 hover:border-red-500/30 transition-all duration-200">
+                      <div className="flex items-center">
+                        <div className="h-12 w-12 bg-gradient-to-r from-red-400 to-red-600 rounded-xl flex items-center justify-center">
+                          <FileText className="h-6 w-6 text-white" />
+                        </div>
+                        <div className="ml-4">
+                          <p className="text-sm font-medium text-gray-400">
+                            Videos Watched
+                          </p>
+                          <p className="text-2xl font-bold text-white">
+                            {dashboardStats.watchedVideos || 0}
                           </p>
                         </div>
                       </div>
@@ -5105,8 +5760,9 @@ const LearningManagementSystem = () => {
                         {[
                           "overview",
                           "sessions",
+                          "videos", // Add this line
                           "assignments",
-                          "queries", // Add this line
+                          "queries",
                           user.role === "teacher" ? "students" : "project",
                           user.role === "teacher" ? "projects" : null,
                           user.role === "teacher" ? "attendance" : null,
@@ -6763,8 +7419,8 @@ const LearningManagementSystem = () => {
                                       <div className="flex items-center gap-3 mb-2">
                                         <span
                                           className={`px-3 py-1 rounded-full text-sm font-medium ${query.status === "answered"
-                                              ? "bg-green-500/20 text-green-300 border border-green-500/30"
-                                              : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
+                                            ? "bg-green-500/20 text-green-300 border border-green-500/30"
+                                            : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
                                             }`}
                                         >
                                           {query.status.charAt(0).toUpperCase() + query.status.slice(1)}
@@ -6864,6 +7520,190 @@ const LearningManagementSystem = () => {
                                     {user.role === "teacher"
                                       ? "No questions from students yet."
                                       : "You haven't asked any questions yet."}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {activeTab === "videos" && (
+                        <div className="space-y-6">
+                          {/* Video Upload Form for Teachers */}
+                          {user.role === "teacher" && (
+                            <div className="border-b border-white/10 pb-6">
+                              <h3 className="text-lg font-semibold text-white mb-4">
+                                Upload Video
+                              </h3>
+                              <form onSubmit={uploadVideo} className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Video Title *
+                                    </label>
+                                    <input
+                                      type="text"
+                                      required
+                                      value={videoForm.title}
+                                      onChange={(e) =>
+                                        setVideoForm({
+                                          ...videoForm,
+                                          title: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                      placeholder="Video title"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Order Index
+                                    </label>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={videoForm.orderIndex}
+                                      onChange={(e) =>
+                                        setVideoForm({
+                                          ...videoForm,
+                                          orderIndex: parseInt(e.target.value) || 0,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                      placeholder="0"
+                                    />
+                                  </div>
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                                    Description
+                                  </label>
+                                  <textarea
+                                    value={videoForm.description}
+                                    onChange={(e) =>
+                                      setVideoForm({
+                                        ...videoForm,
+                                        description: e.target.value,
+                                      })
+                                    }
+                                    className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    rows="3"
+                                    placeholder="Video description"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                                    Video File * (MP4, AVI, MOV, WMV, WebM - Max 500MB)
+                                  </label>
+                                  <input
+                                    type="file"
+                                    required
+                                    onChange={(e) =>
+                                      setVideoForm({
+                                        ...videoForm,
+                                        videoFile: e.target.files[0],
+                                      })
+                                    }
+                                    className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    accept="video/*"
+                                  />
+                                </div>
+                                <button
+                                  type="submit"
+                                  disabled={loading}
+                                  className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                >
+                                  <Upload className="h-4 w-4 mr-2" />
+                                  {loading ? "Uploading..." : "Upload Video"}
+                                </button>
+                              </form>
+                            </div>
+                          )}
+
+                          {/* Videos List */}
+                          <div>
+                            <h3 className="text-lg font-semibold text-white mb-4">
+                              Course Videos
+                            </h3>
+                            <div className="space-y-4">
+                              {videos.map((video, index) => (
+                                <div
+                                  key={video.id}
+                                  className="bg-slate-700/30 rounded-xl p-4 border border-white/10"
+                                >
+                                  <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-3 mb-2">
+                                        <h4 className="font-medium text-white">
+                                          {video.title}
+                                        </h4>
+                                        <span className="text-xs text-gray-400 bg-slate-600/50 px-2 py-1 rounded">
+                                          #{index + 1}
+                                        </span>
+                                        {user.role === "student" && videoProgress[video.id]?.completed && (
+                                          <span className="text-xs text-green-300 bg-green-500/20 px-2 py-1 rounded border border-green-500/30">
+                                            Completed
+                                          </span>
+                                        )}
+                                      </div>
+                                      {video.description && (
+                                        <p className="text-sm text-gray-300 mb-2">
+                                          {video.description}
+                                        </p>
+                                      )}
+                                      <div className="text-sm text-gray-400 space-y-1">
+                                        <p>Uploaded by: {video.uploaded_by_name}</p>
+                                        <p>
+                                          Uploaded: {new Date(video.created_at).toLocaleDateString()}
+                                        </p>
+                                        {user.role === "student" && videoProgress[video.id] && (
+                                          <div className="mt-2">
+                                            <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                              <span>Progress</span>
+                                              <span>
+                                                {Math.round((videoProgress[video.id].watched_seconds / videoProgress[video.id].total_duration) * 100)}%
+                                              </span>
+                                            </div>
+                                            <div className="w-full bg-slate-600 rounded-full h-2">
+                                              <div
+                                                className="bg-purple-500 h-2 rounded-full"
+                                                style={{
+                                                  width: `${Math.round((videoProgress[video.id].watched_seconds / videoProgress[video.id].total_duration) * 100)}%`
+                                                }}
+                                              ></div>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-col space-y-2 ml-4">
+                                      <button
+                                        onClick={() => setSelectedVideo(video)}
+                                        className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors flex items-center"
+                                      >
+                                        <Eye className="h-4 w-4 mr-1" />
+                                        Play
+                                      </button>
+                                      {user.role === "teacher" && (
+                                        <button
+                                          onClick={() => deleteVideo(video.id)}
+                                          className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-colors flex items-center"
+                                        >
+                                          <Trash2 className="h-4 w-4 mr-1" />
+                                          Delete
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                              {videos.length === 0 && (
+                                <div className="text-center py-8">
+                                  <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                    <FileText className="h-8 w-8 text-gray-400" />
+                                  </div>
+                                  <p className="text-gray-400">
+                                    No videos uploaded yet.
                                   </p>
                                 </div>
                               )}

@@ -13,7 +13,7 @@ const crypto = require("crypto");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require("dotenv").config();
 const { sendWelcomeEmail } = require('./emailService');
-
+const activeVideoSessions = new Map();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -41,6 +41,10 @@ app.use("/receipts", express.static("receipts"));
 if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 if (!fs.existsSync("certificates")) fs.mkdirSync("certificates");
 if (!fs.existsSync("receipts")) fs.mkdirSync("receipts");
+// Add this after the existing directory creation code
+if (!fs.existsSync("uploads/videos")) {
+  fs.mkdirSync("uploads/videos", { recursive: true });
+}
 
 // File upload configuration
 const storage = multer.diskStorage({
@@ -48,6 +52,49 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
 });
 const upload = multer({ storage });
+
+// Update the multer storage configuration to handle videos
+const videoStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, "uploads/videos/"),
+  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
+});
+
+const uploadVideo = multer({
+  storage: videoStorage,
+  limits: {
+    fileSize: 500 * 1024 * 1024, // 500MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    console.log('File received:', file.originalname, 'MIME type:', file.mimetype);
+
+    // More comprehensive list of video MIME types
+    const allowedTypes = [
+      'video/mp4',
+      'video/avi',
+      'video/mov',
+      'video/wmv',
+      'video/webm',
+      'video/quicktime',
+      'video/x-msvideo',
+      'video/x-ms-wmv',
+      'video/3gpp',
+      'video/x-flv',
+      'video/mkv',
+      'video/x-matroska'
+    ];
+
+    // Also check file extension as backup
+    const allowedExtensions = ['.mp4', '.avi', '.mov', '.wmv', '.webm', '.qt', '.3gp', '.flv', '.mkv'];
+    const fileExtension = file.originalname.toLowerCase().substr(file.originalname.lastIndexOf('.'));
+
+    if (allowedTypes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) {
+      cb(null, true);
+    } else {
+      console.log('File rejected:', file.originalname, 'MIME type:', file.mimetype, 'Extension:', fileExtension);
+      cb(new Error(`Only video files are allowed. Received: ${file.mimetype} for file: ${file.originalname}`), false);
+    }
+  }
+});
 
 // Database configuration
 const dbConfig = {
@@ -331,6 +378,35 @@ async function createTables() {
   console.log("Blog table created successfully");
 
   console.log("Assignment tables created successfully");
+  await db.query(`CREATE TABLE IF NOT EXISTS course_videos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  video_file VARCHAR(255) NOT NULL,
+  duration INT DEFAULT NULL,
+  order_index INT DEFAULT 0,
+  uploaded_by INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+  FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE CASCADE
+)`);
+
+  // Create video watch progress table
+  await db.query(`CREATE TABLE IF NOT EXISTS video_watch_progress (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  video_id INT NOT NULL,
+  student_id INT NOT NULL,
+  watched_seconds INT DEFAULT 0,
+  total_duration INT DEFAULT 0,
+  completed BOOLEAN DEFAULT FALSE,
+  last_watched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (video_id) REFERENCES course_videos(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_video_progress (video_id, student_id)
+)`);
+
+  console.log("Video tables created successfully");
   // Add this table creation in the createTables() function after other table creations
   await db.query(`CREATE TABLE IF NOT EXISTS course_queries (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -3841,6 +3917,15 @@ app.get(
   `,
           [req.user.userId]
         );
+        const [videoCount] = await db.execute(
+          `
+  SELECT COUNT(*) as count 
+  FROM course_videos cv
+  JOIN courses c ON cv.course_id = c.id 
+  WHERE c.teacher_id = ?
+`,
+          [req.user.userId]
+        );
 
         const [pendingAssignmentCount] = await db.execute(
           `
@@ -3860,6 +3945,7 @@ app.get(
           pendingProjects: projectCount[0].count,
           assignments: assignmentCount[0].count,
           pendingAssignments: pendingAssignmentCount[0].count,
+          videos: videoCount[0].count,
         };
       } else if (req.user.role === "student") {
         const [enrolledCount] = await db.execute(
@@ -3878,12 +3964,23 @@ app.get(
           "SELECT COUNT(*) as count FROM projects WHERE student_id = ?",
           [req.user.userId]
         );
+        const [watchedVideoCount] = await db.execute(
+          `
+          SELECT COUNT(*) as count 
+          FROM video_watch_progress vwp
+          JOIN course_videos cv ON vwp.video_id = cv.id
+          JOIN course_enrollments ce ON cv.course_id = ce.course_id
+          WHERE ce.student_id = ? AND vwp.completed = TRUE
+        `,
+          [req.user.userId]
+        );
 
         stats = {
           enrolledCourses: enrolledCount[0].count,
           completedCourses: completedCount[0].count,
           certificates: certificateCount[0].count,
           projects: projectCount[0].count,
+          watchedVideos: watchedVideoCount[0].count,
         };
       }
 
@@ -4126,6 +4223,440 @@ app.delete(
     }
   }
 );
+
+// Video Management Routes
+
+// Upload video (Teacher only)
+app.post(
+  "/api/courses/:courseId/videos",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  uploadVideo.single("videoFile"),
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+      const { title, description, orderIndex } = req.body;
+      const videoFile = req.file ? req.file.filename : null;
+
+      if (!title || !videoFile) {
+        return res.status(400).json({ message: "Title and video file are required" });
+      }
+
+      const hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      if (!hasAccess) {
+        return res.status(404).json({ message: "Course not found or not authorized" });
+      }
+
+      const [result] = await db.execute(
+        "INSERT INTO course_videos (course_id, title, description, video_file, order_index, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)",
+        [courseId, title, description || null, videoFile, orderIndex || 0, req.user.userId]
+      );
+
+      res.status(201).json({
+        message: "Video uploaded successfully",
+        videoId: result.insertId,
+      });
+    } catch (error) {
+      console.error("Video upload error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Get course videos
+app.get(
+  "/api/courses/:courseId/videos",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      // Check access
+      let hasAccess = false;
+      if (req.user.role === "teacher") {
+        hasAccess = await checkCourseAccess(courseId, req.user.userId);
+      } else if (req.user.role === "student") {
+        const [enrollmentCheck] = await db.execute(
+          "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+          [courseId, req.user.userId]
+        );
+        hasAccess = enrollmentCheck.length > 0;
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Not authorized to view videos" });
+      }
+
+      let query = `
+        SELECT cv.*, u.name as uploaded_by_name
+        FROM course_videos cv
+        JOIN users u ON cv.uploaded_by = u.id
+        WHERE cv.course_id = ?
+      `;
+
+      if (req.user.role === "student") {
+        query += `
+          ORDER BY cv.order_index ASC, cv.created_at ASC
+        `;
+      } else {
+        query += `
+          ORDER BY cv.order_index ASC, cv.created_at DESC
+        `;
+      }
+
+      const [videos] = await db.execute(query, [courseId]);
+
+      // For students, add watch progress
+      if (req.user.role === "student") {
+        for (let video of videos) {
+          const [progress] = await db.execute(
+            "SELECT * FROM video_watch_progress WHERE video_id = ? AND student_id = ?",
+            [video.id, req.user.userId]
+          );
+          video.progress = progress[0] || null;
+        }
+      }
+
+      res.json(videos);
+    } catch (error) {
+      console.error("Get videos error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Stream video with authentication
+// Video streaming endpoint with enhanced security
+app.get(
+  "/api/videos/:videoId/stream",
+  async (req, res) => {
+    try {
+      const { videoId } = req.params;
+
+      // Get token from query parameter as fallback for video requests
+      let token = null;
+      const authHeader = req.headers["authorization"];
+      if (authHeader && authHeader.split(" ")[1]) {
+        token = authHeader.split(" ")[1];
+      } else if (req.query.token) {
+        token = req.query.token;
+      }
+
+      if (!token) {
+        return res.status(401).json({ message: "Access token required" });
+      }
+
+      // Verify token
+      let user;
+      try {
+        user = jwt.verify(token, JWT_SECRET);
+      } catch (err) {
+        return res.status(403).json({ message: "Invalid or expired token" });
+      }
+
+      // Check user status
+      const [userCheck] = await db.execute("SELECT status FROM users WHERE id = ?", [
+        user.userId,
+      ]);
+
+      if (userCheck.length === 0 || userCheck[0].status === "blocked") {
+        return res.status(403).json({ message: "Account is blocked or not found" });
+      }
+
+      // Get video info and check access
+      const [videoCheck] = await db.execute(
+        `SELECT cv.*, c.id as course_id 
+         FROM course_videos cv
+         JOIN courses c ON cv.course_id = c.id
+         WHERE cv.id = ?`,
+        [videoId]
+      );
+
+      if (videoCheck.length === 0) {
+        return res.status(404).json({ message: "Video not found" });
+      }
+
+      const video = videoCheck[0];
+
+      // Check user access
+      let hasAccess = false;
+      if (user.role === "teacher") {
+        const [accessCheck] = await db.execute(
+          `SELECT 1 FROM courses WHERE id = ? AND teacher_id = ?
+           UNION
+           SELECT 1 FROM course_teachers WHERE course_id = ? AND teacher_id = ?`,
+          [video.course_id, user.userId, video.course_id, user.userId]
+        );
+        hasAccess = accessCheck.length > 0;
+      } else if (user.role === "student") {
+        const [enrollmentCheck] = await db.execute(
+          "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+          [video.course_id, user.userId]
+        );
+        hasAccess = enrollmentCheck.length > 0;
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Not authorized to view this video" });
+      }
+
+      // Track active sessions per user (security measure)
+      const sessionKey = `${user.userId}-${videoId}`;
+      const now = Date.now();
+
+      if (!global.activeVideoSessions) {
+        global.activeVideoSessions = new Map();
+      }
+
+      if (global.activeVideoSessions.has(sessionKey)) {
+        const lastAccess = global.activeVideoSessions.get(sessionKey);
+        if (now - lastAccess < 2000) { // 2 second cooldown to prevent rapid requests
+          return res.status(429).json({ message: "Too many requests" });
+        }
+      }
+
+      global.activeVideoSessions.set(sessionKey, now);
+
+      // Clean up old sessions periodically
+      if (Math.random() < 0.01) {
+        for (const [key, time] of global.activeVideoSessions.entries()) {
+          if (now - time > 300000) { // 5 minutes old
+            global.activeVideoSessions.delete(key);
+          }
+        }
+      }
+
+      // Log video access for security monitoring
+      console.log(`Video access: User ${user.userId} (${user.email}) accessing video ${videoId} at ${new Date().toISOString()}`);
+
+      const videoPath = path.join("uploads/videos", video.video_file);
+
+      if (!fs.existsSync(videoPath)) {
+        return res.status(404).json({ message: "Video file not found" });
+      }
+
+      const stat = fs.statSync(videoPath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+
+      // Add comprehensive security headers
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('X-XSS-Protection', '1; mode=block');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('Permissions-Policy', 'picture-in-picture=(), fullscreen=(), screen-wake-lock=(), display-capture=()');
+      res.setHeader('Content-Security-Policy', "default-src 'self'; media-src 'self'; script-src 'none'");
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+
+      // Prevent caching
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, private');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+
+      // Add custom headers to identify protected content
+      res.setHeader('X-Protected-Content', 'true');
+      res.setHeader('X-Video-Owner', video.course_id);
+
+      if (range) {
+        // Handle range requests for video seeking
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+        // Validate range
+        if (start >= fileSize || end >= fileSize || start > end) {
+          res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
+          return res.end();
+        }
+
+        const chunksize = (end - start) + 1;
+        const file = fs.createReadStream(videoPath, { start, end });
+
+        const head = {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunksize,
+          'Content-Type': 'video/mp4',
+        };
+
+        res.writeHead(206, head);
+
+        // Handle stream errors
+        file.on('error', (err) => {
+          console.error('Video stream error:', err);
+          if (!res.headersSent) {
+            res.status(500).end();
+          }
+        });
+
+        file.on('end', () => {
+          // Update last access time when stream ends
+          global.activeVideoSessions.set(sessionKey, Date.now());
+        });
+
+        file.pipe(res);
+      } else {
+        // Handle full file requests
+        const head = {
+          'Content-Length': fileSize,
+          'Content-Type': 'video/mp4',
+          'Accept-Ranges': 'bytes',
+        };
+
+        res.writeHead(200, head);
+
+        const stream = fs.createReadStream(videoPath);
+
+        // Handle stream errors
+        stream.on('error', (err) => {
+          console.error('Video stream error:', err);
+          if (!res.headersSent) {
+            res.status(500).end();
+          }
+        });
+
+        stream.on('end', () => {
+          // Update last access time when stream ends
+          global.activeVideoSessions.set(sessionKey, Date.now());
+        });
+
+        // Handle client disconnect
+        req.on('close', () => {
+          stream.destroy();
+        });
+
+        req.on('aborted', () => {
+          stream.destroy();
+        });
+
+        stream.pipe(res);
+      }
+
+    } catch (error) {
+      console.error("Video stream error:", error);
+
+      // Don't expose internal errors to client
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  }
+);
+
+// Update watch progress (Student only)
+app.post(
+  "/api/videos/:videoId/progress",
+  authenticateToken,
+  requireRole(["student"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { videoId } = req.params;
+      const { watchedSeconds, totalDuration } = req.body;
+
+      // Check if student has access to the video
+      const [videoCheck] = await db.execute(
+        `SELECT cv.*, c.id as course_id 
+         FROM course_videos cv
+         JOIN courses c ON cv.course_id = c.id
+         WHERE cv.id = ?`,
+        [videoId]
+      );
+
+      if (videoCheck.length === 0) {
+        return res.status(404).json({ message: "Video not found" });
+      }
+
+      const video = videoCheck[0];
+
+      const [enrollmentCheck] = await db.execute(
+        "SELECT id FROM course_enrollments WHERE course_id = ? AND student_id = ?",
+        [video.course_id, req.user.userId]
+      );
+
+      if (enrollmentCheck.length === 0) {
+        return res.status(403).json({ message: "Not enrolled in this course" });
+      }
+
+      const completed = totalDuration > 0 && (watchedSeconds / totalDuration) >= 0.9;
+
+      await db.execute(
+        `INSERT INTO video_watch_progress (video_id, student_id, watched_seconds, total_duration, completed)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE 
+           watched_seconds = GREATEST(watched_seconds, VALUES(watched_seconds)),
+           total_duration = VALUES(total_duration),
+           completed = GREATEST(completed, VALUES(completed)),
+           last_watched_at = NOW()`,
+        [videoId, req.user.userId, watchedSeconds, totalDuration, completed]
+      );
+
+      res.json({ message: "Progress updated successfully" });
+    } catch (error) {
+      console.error("Update progress error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// Delete video (Teacher only)
+app.delete(
+  "/api/videos/:videoId",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { videoId } = req.params;
+
+      const [videoCheck] = await db.execute(
+        `SELECT cv.*, c.teacher_id 
+         FROM course_videos cv
+         JOIN courses c ON cv.course_id = c.id
+         LEFT JOIN course_teachers ct ON c.id = ct.course_id AND ct.teacher_id = ?
+         WHERE cv.id = ? AND (c.teacher_id = ? OR ct.teacher_id = ?)`,
+        [req.user.userId, videoId, req.user.userId, req.user.userId]
+      );
+
+      if (videoCheck.length === 0) {
+        return res.status(404).json({ message: "Video not found or not authorized" });
+      }
+
+      const video = videoCheck[0];
+
+      // Delete the video file
+      const videoPath = path.join("uploads/videos", video.video_file);
+      if (fs.existsSync(videoPath)) {
+        fs.unlinkSync(videoPath);
+      }
+
+      await db.execute("DELETE FROM course_videos WHERE id = ?", [videoId]);
+
+      res.json({ message: "Video deleted successfully" });
+    } catch (error) {
+      console.error("Delete video error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+global.activeVideoSessions = new Map();
+
+const cleanupVideoSessions = () => {
+  const now = Date.now();
+  const fiveMinutesAgo = now - 300000; // 5 minutes
+
+  for (const [key, time] of global.activeVideoSessions.entries()) {
+    if (time < fiveMinutesAgo) {
+      global.activeVideoSessions.delete(key);
+    }
+  }
+};
+
+// Clean up sessions every 5 minutes
+setInterval(cleanupVideoSessions, 300000);
+
 
 // WebSocket connection handling
 io.on("connection", (socket) => {
