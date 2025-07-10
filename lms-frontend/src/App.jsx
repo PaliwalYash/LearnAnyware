@@ -651,13 +651,32 @@ const LearningManagementSystem = () => {
     testMode: true
   });
 
-  // Add these state variables with other useState declarations
   const [queries, setQueries] = useState([]);
   const [queryForm, setQueryForm] = useState({
+    title: "",
     question: "",
+    priority: "medium",
+    category: "general",
+    isAnonymous: false,
+    attachments: []
   });
+  const [queryFilters, setQueryFilters] = useState({
+    status: "all",
+    category: "all",
+    priority: "all",
+    sortBy: "recent",
+    search: ""
+  });
+  const [queryStats, setQueryStats] = useState({});
   const [answerForm, setAnswerForm] = useState("");
   const [selectedQuery, setSelectedQuery] = useState(null);
+  const [queryPagination, setQueryPagination] = useState({
+    page: 1,
+    limit: 10,
+    total: 0,
+    totalPages: 0
+  });
+  const [expandedQueries, setExpandedQueries] = useState(new Set());
 
   // Form states
   const [authForm, setAuthForm] = useState({
@@ -773,11 +792,18 @@ const LearningManagementSystem = () => {
         fetchAttendance(selectedCourse.id);
         fetchSubTeachers(selectedCourse.id);
         fetchAllCourseTeachers(selectedCourse.id);
+        fetchQueryStats(selectedCourse.id);
       } else if (user?.role === "student") {
         fetchMyProject(selectedCourse.id);
       }
     }
   }, [selectedCourse, user]);
+
+  useEffect(() => {
+    if (selectedCourse && selectedCourse !== "create") {
+      fetchQueries(selectedCourse.id, 1);
+    }
+  }, [queryFilters]);
 
   // Add this useEffect to disable developer tools and screenshots
   // Add these additional security hooks at the top of your component
@@ -1550,12 +1576,30 @@ const LearningManagementSystem = () => {
   };
 
   // Query API Functions
-  const fetchQueries = async (courseId) => {
+  const fetchQueries = async (courseId, page = 1) => {
     try {
-      const data = await apiCall(`/courses/${courseId}/queries`);
-      setQueries(data);
+      const params = new URLSearchParams({
+        ...queryFilters,
+        page: page.toString(),
+        limit: queryPagination.limit.toString()
+      });
+
+      const data = await apiCall(`/courses/${courseId}/queries?${params}`);
+      setQueries(data.queries);
+      setQueryPagination(data.pagination);
     } catch (error) {
       showMessage(error.message, "error");
+    }
+  };
+
+  const fetchQueryStats = async (courseId) => {
+    if (user.role !== "teacher") return;
+
+    try {
+      const data = await apiCall(`/courses/${courseId}/query-stats`);
+      setQueryStats(data);
+    } catch (error) {
+      console.error("Fetch query stats error:", error);
     }
   };
 
@@ -1564,14 +1608,44 @@ const LearningManagementSystem = () => {
     setLoading(true);
 
     try {
-      await apiCall(`/courses/${selectedCourse.id}/queries`, {
-        method: "POST",
-        body: JSON.stringify(queryForm),
+      const formData = new FormData();
+      formData.append("title", queryForm.title);
+      formData.append("question", queryForm.question);
+      formData.append("priority", queryForm.priority);
+      formData.append("category", queryForm.category);
+      formData.append("isAnonymous", queryForm.isAnonymous);
+
+      // Add attachments
+      queryForm.attachments.forEach((file) => {
+        formData.append("attachments", file);
       });
 
-      showMessage("Query submitted successfully!", "success");
-      setQueryForm({ question: "" });
-      fetchQueries(selectedCourse.id);
+      const response = await fetch(`${API_BASE}/courses/${selectedCourse.id}/queries`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        showMessage("Query submitted successfully!", "success");
+        setQueryForm({
+          title: "",
+          question: "",
+          priority: "medium",
+          category: "general",
+          isAnonymous: false,
+          attachments: []
+        });
+        fetchQueries(selectedCourse.id);
+        if (user.role === "teacher") {
+          fetchQueryStats(selectedCourse.id);
+        }
+      } else {
+        throw new Error(data.message);
+      }
     } catch (error) {
       showMessage(error.message, "error");
     }
@@ -1579,24 +1653,126 @@ const LearningManagementSystem = () => {
     setLoading(false);
   };
 
-  const answerQuery = async (queryId) => {
+  const answerQuery = async (queryId, closeQuery = false) => {
     setLoading(true);
 
     try {
       await apiCall(`/queries/${queryId}/answer`, {
         method: "PUT",
-        body: JSON.stringify({ answer: answerForm }),
+        body: JSON.stringify({ answer: answerForm, closeQuery }),
       });
 
-      showMessage("Query answered successfully!", "success");
+      showMessage(
+        closeQuery ? "Query answered and closed successfully!" : "Query answered successfully!",
+        "success"
+      );
       setAnswerForm("");
       setSelectedQuery(null);
       fetchQueries(selectedCourse.id);
+      if (user.role === "teacher") {
+        fetchQueryStats(selectedCourse.id);
+      }
     } catch (error) {
       showMessage(error.message, "error");
     }
 
     setLoading(false);
+  };
+
+  const updateQueryStatus = async (queryId, status) => {
+    try {
+      await apiCall(`/queries/${queryId}/status`, {
+        method: "PUT",
+        body: JSON.stringify({ status }),
+      });
+
+      showMessage("Query status updated successfully!", "success");
+      fetchQueries(selectedCourse.id);
+      if (user.role === "teacher") {
+        fetchQueryStats(selectedCourse.id);
+      }
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+  const markQueryHelpful = async (queryId) => {
+    try {
+      await apiCall(`/queries/${queryId}/helpful`, {
+        method: "POST",
+      });
+
+      showMessage("Marked as helpful!", "success");
+      fetchQueries(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+
+  const toggleQueryFollow = async (queryId) => {
+    try {
+      const data = await apiCall(`/queries/${queryId}/follow`, {
+        method: "POST",
+      });
+
+      showMessage(data.message, "success");
+      fetchQueries(selectedCourse.id);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+  const handleFileAttachment = (e) => {
+    const files = Array.from(e.target.files);
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    const allowedTypes = ['image/', 'application/pdf', 'text/', 'application/msword', 'application/vnd.openxmlformats-officedocument'];
+
+    const validFiles = files.filter(file => {
+      if (file.size > maxSize) {
+        showMessage(`File ${file.name} is too large. Maximum size is 5MB.`, "error");
+        return false;
+      }
+
+      const isValidType = allowedTypes.some(type => file.type.startsWith(type));
+      if (!isValidType) {
+        showMessage(`File ${file.name} has an unsupported format.`, "error");
+        return false;
+      }
+
+      return true;
+    });
+
+    setQueryForm({
+      ...queryForm,
+      attachments: [...queryForm.attachments, ...validFiles].slice(0, 3) // Max 3 files
+    });
+  };
+
+  const removeAttachment = (index) => {
+    const newAttachments = queryForm.attachments.filter((_, i) => i !== index);
+    setQueryForm({ ...queryForm, attachments: newAttachments });
+  };
+
+  const applyFilters = () => {
+    fetchQueries(selectedCourse.id, 1);
+  };
+  const resetFilters = () => {
+    setQueryFilters({
+      status: "all",
+      category: "all",
+      priority: "all",
+      sortBy: "recent",
+      search: ""
+    });
+    setTimeout(() => fetchQueries(selectedCourse.id, 1), 100);
+  };
+
+  const toggleQueryExpansion = (queryId) => {
+    const newExpanded = new Set(expandedQueries);
+    if (newExpanded.has(queryId)) {
+      newExpanded.delete(queryId);
+    } else {
+      newExpanded.add(queryId);
+    }
+    setExpandedQueries(newExpanded);
   };
 
   const deleteQuery = async (queryId) => {
@@ -7380,19 +7556,138 @@ const LearningManagementSystem = () => {
                           </div>
                         </div>
                       )}
-                      {/* Queries Tab */}
+                      {/* Enhanced Queries Tab */}
                       {activeTab === "queries" && (
                         <div className="space-y-6">
-                          {/* Submit Query Form for Students */}
+                          {/* Query Statistics for Teachers */}
+                          {user.role === "teacher" && queryStats.total_queries > 0 && (
+                            <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
+                              <h4 className="text-lg font-medium text-white mb-4">Query Statistics</h4>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="text-center">
+                                  <div className="text-2xl font-bold text-blue-400">{queryStats.total_queries}</div>
+                                  <div className="text-sm text-gray-400">Total Queries</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-2xl font-bold text-yellow-400">{queryStats.pending_queries}</div>
+                                  <div className="text-sm text-gray-400">Pending</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-2xl font-bold text-green-400">{queryStats.answered_queries}</div>
+                                  <div className="text-sm text-gray-400">Answered</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-2xl font-bold text-purple-400">
+                                    {queryStats.avg_response_time_hours ? Math.round(queryStats.avg_response_time_hours) : 0}h
+                                  </div>
+                                  <div className="text-sm text-gray-400">Avg Response</div>
+                                </div>
+                              </div>
+
+                              {/* Updated to use high_priority_count instead of high_priority */}
+                              {queryStats.high_priority_count > 0 && (
+                                <div className="mt-3 p-2 bg-red-500/20 rounded-lg border border-red-500/30">
+                                  <div className="flex items-center text-red-300">
+                                    <AlertCircle className="h-4 w-4 mr-2" />
+                                    <span className="text-sm">{queryStats.high_priority_count} high priority queries need attention</span>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Enhanced Submit Query Form for Students */}
                           {user.role === "student" && (
                             <div className="border-b border-white/10 pb-6">
-                              <h3 className="text-lg font-semibold text-white mb-4">
+                              <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                                <Plus className="h-5 w-5 mr-2" />
                                 Ask a Question
                               </h3>
                               <form onSubmit={submitQuery} className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Question Title *
+                                    </label>
+                                    <input
+                                      type="text"
+                                      required
+                                      value={queryForm.title}
+                                      onChange={(e) =>
+                                        setQueryForm({
+                                          ...queryForm,
+                                          title: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                      placeholder="Brief title for your question..."
+                                      maxLength="255"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Category
+                                    </label>
+                                    <select
+                                      value={queryForm.category}
+                                      onChange={(e) =>
+                                        setQueryForm({
+                                          ...queryForm,
+                                          category: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    >
+                                      <option value="general">General</option>
+                                      <option value="assignment">Assignment</option>
+                                      <option value="technical">Technical</option>
+                                      <option value="deadline">Deadline</option>
+                                      <option value="content">Content</option>
+                                    </select>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                      Priority
+                                    </label>
+                                    <select
+                                      value={queryForm.priority}
+                                      onChange={(e) =>
+                                        setQueryForm({
+                                          ...queryForm,
+                                          priority: e.target.value,
+                                        })
+                                      }
+                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                    >
+                                      <option value="low">Low</option>
+                                      <option value="medium">Medium</option>
+                                      <option value="high">High</option>
+                                    </select>
+                                  </div>
+                                  <div className="flex items-center pt-8">
+                                    <label className="flex items-center cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={queryForm.isAnonymous}
+                                        onChange={(e) =>
+                                          setQueryForm({
+                                            ...queryForm,
+                                            isAnonymous: e.target.checked,
+                                          })
+                                        }
+                                        className="mr-2 rounded"
+                                      />
+                                      <span className="text-sm text-gray-300">Ask anonymously</span>
+                                    </label>
+                                  </div>
+                                </div>
+
                                 <div>
                                   <label className="block text-sm font-medium text-gray-300 mb-2">
-                                    Your Question
+                                    Your Question *
                                   </label>
                                   <textarea
                                     required
@@ -7405,9 +7700,61 @@ const LearningManagementSystem = () => {
                                     }
                                     className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
                                     rows="4"
-                                    placeholder="Ask your question here..."
+                                    placeholder="Describe your question in detail..."
                                   />
                                 </div>
+
+                                {/* File Attachments */}
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                                    Attachments (Optional)
+                                  </label>
+                                  <div className="flex items-center space-x-4">
+                                    <input
+                                      type="file"
+                                      multiple
+                                      onChange={handleFileAttachment}
+                                      className="hidden"
+                                      id="query-attachments"
+                                      accept="image/*,.pdf,.doc,.docx,.txt"
+                                    />
+                                    <label
+                                      htmlFor="query-attachments"
+                                      className="bg-slate-600 text-white px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors cursor-pointer flex items-center"
+                                    >
+                                      <Upload className="h-4 w-4 mr-2" />
+                                      Add Files
+                                    </label>
+                                    <span className="text-xs text-gray-400">
+                                      Max 3 files, 5MB each. Images, PDFs, docs allowed.
+                                    </span>
+                                  </div>
+
+                                  {/* Selected Files */}
+                                  {queryForm.attachments.length > 0 && (
+                                    <div className="mt-3 space-y-2">
+                                      {queryForm.attachments.map((file, index) => (
+                                        <div key={index} className="flex items-center justify-between bg-slate-700/30 p-2 rounded-lg">
+                                          <div className="flex items-center">
+                                            <FileText className="h-4 w-4 mr-2 text-gray-400" />
+                                            <span className="text-sm text-white">{file.name}</span>
+                                            <span className="text-xs text-gray-400 ml-2">
+                                              ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                                            </span>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() => removeAttachment(index)}
+                                            className="text-red-400 hover:text-red-300"
+                                          >
+                                            <X className="h-4 w-4" />
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
                                 <button
                                   type="submit"
                                   disabled={loading}
@@ -7420,124 +7767,456 @@ const LearningManagementSystem = () => {
                             </div>
                           )}
 
-                          {/* Queries List */}
-                          <div>
-                            <h3 className="text-lg font-semibold text-white mb-4">
-                              {user.role === "teacher" ? "Student Questions" : "Your Questions"}
-                            </h3>
-                            <div className="space-y-4">
-                              {queries.map((query) => (
-                                <div
-                                  key={query.id}
-                                  className="bg-slate-700/30 rounded-xl p-4 border border-white/10"
+                          {/* Enhanced Filters and Search */}
+                          <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
+                            <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center">
+                              <div className="flex-1">
+                                <input
+                                  type="text"
+                                  placeholder="Search queries..."
+                                  value={queryFilters.search}
+                                  onChange={(e) =>
+                                    setQueryFilters({ ...queryFilters, search: e.target.value })
+                                  }
+                                  className="w-full px-4 py-2 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm"
+                                />
+                              </div>
+
+                              <div className="flex flex-wrap gap-2">
+                                <select
+                                  value={queryFilters.status}
+                                  onChange={(e) =>
+                                    setQueryFilters({ ...queryFilters, status: e.target.value })
+                                  }
+                                  className="px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg text-white text-sm"
                                 >
-                                  <div className="flex justify-between items-start">
-                                    <div className="flex-1">
-                                      <div className="flex items-center gap-3 mb-2">
-                                        <span
-                                          className={`px-3 py-1 rounded-full text-sm font-medium ${query.status === "answered"
-                                            ? "bg-green-500/20 text-green-300 border border-green-500/30"
-                                            : "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30"
-                                            }`}
-                                        >
-                                          {query.status.charAt(0).toUpperCase() + query.status.slice(1)}
-                                        </span>
-                                        {user.role === "teacher" && (
-                                          <span className="text-sm text-gray-400">
-                                            by {query.student_name}
-                                          </span>
-                                        )}
-                                      </div>
+                                  <option value="all">All Status</option>
+                                  <option value="pending">Pending</option>
+                                  <option value="answered">Answered</option>
+                                  <option value="closed">Closed</option>
+                                </select>
 
-                                      <div className="mb-3">
-                                        <p className="text-sm text-gray-400 mb-1">Question:</p>
-                                        <p className="text-white">{query.question}</p>
-                                        <p className="text-xs text-gray-500 mt-1">
-                                          Asked on {new Date(query.asked_at).toLocaleString()}
-                                        </p>
-                                      </div>
+                                <select
+                                  value={queryFilters.category}
+                                  onChange={(e) =>
+                                    setQueryFilters({ ...queryFilters, category: e.target.value })
+                                  }
+                                  className="px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg text-white text-sm"
+                                >
+                                  <option value="all">All Categories</option>
+                                  <option value="general">General</option>
+                                  <option value="assignment">Assignment</option>
+                                  <option value="technical">Technical</option>
+                                  <option value="deadline">Deadline</option>
+                                  <option value="content">Content</option>
+                                </select>
 
-                                      {query.answer && (
-                                        <div className="mt-3 p-3 bg-slate-600/50 rounded-xl">
-                                          <p className="text-sm text-gray-400 mb-1">Answer:</p>
-                                          <p className="text-white">{query.answer}</p>
-                                          <p className="text-xs text-gray-500 mt-1">
-                                            Answered by {query.teacher_name} on{" "}
-                                            {new Date(query.answered_at).toLocaleString()}
-                                          </p>
-                                        </div>
-                                      )}
+                                <select
+                                  value={queryFilters.priority}
+                                  onChange={(e) =>
+                                    setQueryFilters({ ...queryFilters, priority: e.target.value })
+                                  }
+                                  className="px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg text-white text-sm"
+                                >
+                                  <option value="all">All Priority</option>
+                                  <option value="high">High</option>
+                                  <option value="medium">Medium</option>
+                                  <option value="low">Low</option>
+                                </select>
 
-                                      {/* Answer Form for Teachers */}
-                                      {user.role === "teacher" &&
-                                        query.status === "pending" &&
-                                        selectedQuery === query.id && (
-                                          <div className="mt-3 p-3 bg-slate-600/30 rounded-xl">
-                                            <textarea
-                                              value={answerForm}
-                                              onChange={(e) => setAnswerForm(e.target.value)}
-                                              placeholder="Type your answer here..."
-                                              className="w-full px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm"
-                                              rows="3"
-                                            />
-                                            <div className="flex space-x-2 mt-2">
-                                              <button
-                                                onClick={() => answerQuery(query.id)}
-                                                disabled={loading || !answerForm.trim()}
-                                                className="bg-green-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 transition-colors"
+                                <select
+                                  value={queryFilters.sortBy}
+                                  onChange={(e) =>
+                                    setQueryFilters({ ...queryFilters, sortBy: e.target.value })
+                                  }
+                                  className="px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg text-white text-sm"
+                                >
+                                  <option value="recent">Recent</option>
+                                  <option value="oldest">Oldest</option>
+                                  <option value="priority">Priority</option>
+                                  <option value="popular">Popular</option>
+                                  <option value="unanswered">Unanswered First</option>
+                                </select>
+
+                                <button
+                                  onClick={resetFilters}
+                                  className="px-3 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"
+                                >
+                                  Reset
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Enhanced Queries List */}
+                          <div>
+                            <div className="flex justify-between items-center mb-4">
+                              <h3 className="text-lg font-semibold text-white">
+                                {user.role === "teacher" ? "Student Questions" : "Course Questions"}
+                                {queries.length > 0 && (
+                                  <span className="text-sm text-gray-400 ml-2">
+                                    ({queryPagination.total} total)
+                                  </span>
+                                )}
+                              </h3>
+                            </div>
+
+                            <div className="space-y-4">
+                              {queries.map((query) => {
+                                const isExpanded = expandedQueries.has(query.id);
+                                const showFullQuestion = isExpanded || query.question.length <= 200;
+
+                                return (
+                                  <div
+                                    key={query.id}
+                                    className="bg-slate-700/30 rounded-xl p-4 border border-white/10 hover:border-purple-500/30 transition-all duration-200"
+                                  >
+                                    <div className="flex justify-between items-start">
+                                      <div className="flex-1">
+                                        {/* Query Header */}
+                                        <div className="flex items-start justify-between mb-3">
+                                          <div className="flex-1">
+                                            <h4 className="font-medium text-white text-lg mb-2">
+                                              {query.title}
+                                            </h4>
+                                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                                              <span
+                                                className={`px-2 py-1 rounded-full text-xs font-medium border ${query.status === "answered"
+                                                  ? "bg-green-500/20 text-green-300 border-green-500/30"
+                                                  : query.status === "closed"
+                                                    ? "bg-gray-500/20 text-gray-300 border-gray-500/30"
+                                                    : "bg-yellow-500/20 text-yellow-300 border-yellow-500/30"
+                                                  }`}
                                               >
-                                                {loading ? "Answering..." : "Submit Answer"}
+                                                {query.status.charAt(0).toUpperCase() + query.status.slice(1)}
+                                              </span>
+
+                                              <span
+                                                className={`px-2 py-1 rounded-full text-xs font-medium border ${query.priority === "high"
+                                                  ? "bg-red-500/20 text-red-300 border-red-500/30"
+                                                  : query.priority === "medium"
+                                                    ? "bg-yellow-500/20 text-yellow-300 border-yellow-500/30"
+                                                    : "bg-blue-500/20 text-blue-300 border-blue-500/30"
+                                                  }`}
+                                              >
+                                                {query.priority.charAt(0).toUpperCase() + query.priority.slice(1)}
+                                              </span>
+
+                                              <span className="px-2 py-1 bg-purple-500/20 text-purple-300 border border-purple-500/30 rounded-full text-xs font-medium">
+                                                {query.category.charAt(0).toUpperCase() + query.category.slice(1)}
+                                              </span>
+
+                                              {query.attachment_count > 0 && (
+                                                <span className="flex items-center text-xs text-gray-400">
+                                                  <FileText className="h-3 w-3 mr-1" />
+                                                  {query.attachment_count} file{query.attachment_count > 1 ? 's' : ''}
+                                                </span>
+                                              )}
+
+                                              {query.is_anonymous && (
+                                                <span className="px-2 py-1 bg-gray-500/20 text-gray-300 border border-gray-500/30 rounded-full text-xs">
+                                                  Anonymous
+                                                </span>
+                                              )}
+                                            </div>
+
+                                            <div className="flex items-center gap-4 text-xs text-gray-400 mb-3">
+                                              <span className="flex items-center">
+                                                <User className="h-3 w-3 mr-1" />
+                                                {query.student_name}
+                                              </span>
+                                              <span className="flex items-center">
+                                                <Clock className="h-3 w-3 mr-1" />
+                                                {new Date(query.asked_at).toLocaleDateString()}
+                                              </span>
+                                              {query.views > 0 && (
+                                                <span className="flex items-center">
+                                                  <Eye className="h-3 w-3 mr-1" />
+                                                  {query.views} views
+                                                </span>
+                                              )}
+                                              {query.helpful_votes > 0 && (
+                                                <span className="flex items-center">
+                                                  <CheckCircle className="h-3 w-3 mr-1" />
+                                                  {query.helpful_votes} helpful
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* Question Content */}
+                                        <div className="mb-3">
+                                          <p className="text-sm text-gray-400 mb-1">Question:</p>
+                                          <div className="text-white">
+                                            {showFullQuestion ? (
+                                              <p className="whitespace-pre-wrap">{query.question}</p>
+                                            ) : (
+                                              <p className="whitespace-pre-wrap">
+                                                {query.question.substring(0, 200)}...
+                                              </p>
+                                            )}
+                                            {query.question.length > 200 && (
+                                              <button
+                                                onClick={() => toggleQueryExpansion(query.id)}
+                                                className="text-purple-400 hover:text-purple-300 text-sm mt-1 flex items-center"
+                                              >
+                                                {isExpanded ? (
+                                                  <>
+                                                    <ChevronLeft className="h-3 w-3 mr-1" />
+                                                    Show Less
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    <ChevronRight className="h-3 w-3 mr-1" />
+                                                    Read More
+                                                  </>
+                                                )}
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        {/* Attachments */}
+                                        {query.attachments && query.attachments.length > 0 && (
+                                          <div className="mb-3">
+                                            <p className="text-sm text-gray-400 mb-2">Attachments:</p>
+                                            <div className="flex flex-wrap gap-2">
+                                              {query.attachments.map((attachment) => (
+                                                <a
+                                                  key={attachment.id}
+                                                  href={`http://localhost:5002/uploads/${attachment.filename}`}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="flex items-center bg-slate-600/50 px-3 py-2 rounded-lg hover:bg-slate-600/70 transition-colors"
+                                                >
+                                                  <FileText className="h-3 w-3 mr-2 text-gray-400" />
+                                                  <span className="text-sm text-white">{attachment.original_name}</span>
+                                                  <span className="text-xs text-gray-400 ml-2">
+                                                    ({(attachment.file_size / 1024 / 1024).toFixed(2)} MB)
+                                                  </span>
+                                                </a>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {/* Answer Section */}
+                                        {query.answer && (
+                                          <div className="mt-4 p-4 bg-slate-600/50 rounded-xl border border-white/10">
+                                            <p className="text-sm text-gray-400 mb-2 flex items-center">
+                                              <CheckCircle className="h-3 w-3 mr-1" />
+                                              Answer:
+                                            </p>
+                                            <p className="text-white whitespace-pre-wrap">{query.answer}</p>
+                                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/10">
+                                              <p className="text-xs text-gray-400">
+                                                Answered by {query.teacher_name} on{" "}
+                                                {new Date(query.answered_at).toLocaleString()}
+                                              </p>
+                                              {user.role === "student" && query.status === "answered" && (
+                                                <button
+                                                  onClick={() => markQueryHelpful(query.id)}
+                                                  className="text-green-400 hover:text-green-300 text-xs flex items-center"
+                                                >
+                                                  <CheckCircle className="h-3 w-3 mr-1" />
+                                                  Helpful
+                                                </button>
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {/* Answer Form for Teachers */}
+                                        {user.role === "teacher" &&
+                                          query.status === "pending" &&
+                                          selectedQuery === query.id && (
+                                            <div className="mt-4 p-4 bg-slate-600/30 rounded-xl border border-white/10">
+                                              <textarea
+                                                value={answerForm}
+                                                onChange={(e) => setAnswerForm(e.target.value)}
+                                                placeholder="Type your answer here..."
+                                                className="w-full px-3 py-3 bg-slate-700/50 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm"
+                                                rows="4"
+                                              />
+                                              <div className="flex space-x-2 mt-3">
+                                                <button
+                                                  onClick={() => answerQuery(query.id, false)}
+                                                  disabled={loading || !answerForm.trim()}
+                                                  className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center"
+                                                >
+                                                  <MessageCircle className="h-3 w-3 mr-1" />
+                                                  {loading ? "Answering..." : "Submit Answer"}
+                                                </button>
+                                                <button
+                                                  onClick={() => answerQuery(query.id, true)}
+                                                  disabled={loading || !answerForm.trim()}
+                                                  className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center"
+                                                >
+                                                  <Lock className="h-3 w-3 mr-1" />
+                                                  Answer & Close
+                                                </button>
+                                                <button
+                                                  onClick={() => {
+                                                    setSelectedQuery(null);
+                                                    setAnswerForm("");
+                                                  }}
+                                                  className="bg-gray-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 transition-colors"
+                                                >
+                                                  Cancel
+                                                </button>
+                                              </div>
+                                            </div>
+                                          )}
+                                      </div>
+
+                                      {/* Action Buttons */}
+                                      <div className="flex flex-col space-y-2 ml-4">
+                                        {user.role === "teacher" && query.status === "pending" && (
+                                          <button
+                                            onClick={() => {
+                                              setSelectedQuery(selectedQuery === query.id ? null : query.id);
+                                              setAnswerForm("");
+                                            }}
+                                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center whitespace-nowrap"
+                                          >
+                                            <MessageCircle className="h-3 w-3 mr-1" />
+                                            {selectedQuery === query.id ? "Cancel" : "Answer"}
+                                          </button>
+                                        )}
+
+                                        {user.role === "teacher" && (
+                                          <div className="relative group">
+                                            <button className="bg-slate-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-slate-700 transition-colors flex items-center">
+                                              <Settings className="h-3 w-3 mr-1" />
+                                              Status
+                                            </button>
+                                            <div className="absolute right-0 top-full mt-1 bg-slate-800 border border-white/20 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+                                              <button
+                                                onClick={() => updateQueryStatus(query.id, "pending")}
+                                                className="block w-full text-left px-3 py-2 text-sm text-white hover:bg-slate-700 rounded-t-lg"
+                                              >
+                                                Mark Pending
                                               </button>
                                               <button
-                                                onClick={() => {
-                                                  setSelectedQuery(null);
-                                                  setAnswerForm("");
-                                                }}
-                                                className="bg-gray-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-gray-700 transition-colors"
+                                                onClick={() => updateQueryStatus(query.id, "answered")}
+                                                className="block w-full text-left px-3 py-2 text-sm text-white hover:bg-slate-700"
                                               >
-                                                Cancel
+                                                Mark Answered
+                                              </button>
+                                              <button
+                                                onClick={() => updateQueryStatus(query.id, "closed")}
+                                                className="block w-full text-left px-3 py-2 text-sm text-white hover:bg-slate-700 rounded-b-lg"
+                                              >
+                                                Close Query
                                               </button>
                                             </div>
                                           </div>
                                         )}
-                                    </div>
 
-                                    <div className="flex flex-col space-y-2 ml-4">
-                                      {user.role === "teacher" && query.status === "pending" && (
+                                        {user.role === "student" && query.student_id === user.userId && (
+                                          <button
+                                            onClick={() => toggleQueryFollow(query.id)}
+                                            className={`px-3 py-2 rounded-lg text-sm transition-colors flex items-center ${query.isFollowing
+                                              ? "bg-purple-600 text-white hover:bg-purple-700"
+                                              : "bg-slate-600 text-white hover:bg-slate-700"
+                                              }`}
+                                          >
+                                            <Bell className="h-3 w-3 mr-1" />
+                                            {query.isFollowing ? "Following" : "Follow"}
+                                          </button>
+                                        )}
+
                                         <button
-                                          onClick={() => {
-                                            setSelectedQuery(selectedQuery === query.id ? null : query.id);
-                                            setAnswerForm("");
-                                          }}
-                                          className="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center"
+                                          onClick={() => deleteQuery(query.id)}
+                                          className="bg-red-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-red-700 transition-colors flex items-center"
                                         >
-                                          <MessageCircle className="h-3 w-3 mr-1" />
-                                          {selectedQuery === query.id ? "Cancel" : "Answer"}
+                                          <Trash2 className="h-3 w-3 mr-1" />
+                                          Delete
                                         </button>
-                                      )}
-
-                                      <button
-                                        onClick={() => deleteQuery(query.id)}
-                                        className="bg-red-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-red-700 transition-colors flex items-center"
-                                      >
-                                        <Trash2 className="h-3 w-3 mr-1" />
-                                        Delete
-                                      </button>
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
-                              ))}
+                                );
+                              })}
 
+                              {/* Pagination */}
+                              {queryPagination.totalPages > 1 && (
+                                <div className="flex justify-center items-center space-x-2 mt-6">
+                                  <button
+                                    onClick={() => fetchQueries(selectedCourse.id, queryPagination.page - 1)}
+                                    disabled={queryPagination.page === 1}
+                                    className="px-3 py-2 bg-slate-700/50 text-white rounded-lg hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    <ChevronLeft className="h-4 w-4" />
+                                  </button>
+
+                                  <div className="flex space-x-1">
+                                    {Array.from({ length: Math.min(5, queryPagination.totalPages) }, (_, i) => {
+                                      let pageNum;
+                                      if (queryPagination.totalPages <= 5) {
+                                        pageNum = i + 1;
+                                      } else if (queryPagination.page <= 3) {
+                                        pageNum = i + 1;
+                                      } else if (queryPagination.page >= queryPagination.totalPages - 2) {
+                                        pageNum = queryPagination.totalPages - 4 + i;
+                                      } else {
+                                        pageNum = queryPagination.page - 2 + i;
+                                      }
+
+                                      return (
+                                        <button
+                                          key={pageNum}
+                                          onClick={() => fetchQueries(selectedCourse.id, pageNum)}
+                                          className={`px-3 py-2 rounded-lg text-sm transition-colors ${queryPagination.page === pageNum
+                                            ? "bg-purple-500 text-white shadow-lg"
+                                            : "bg-slate-700/50 text-gray-300 hover:bg-slate-600"
+                                            }`}
+                                        >
+                                          {pageNum}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+
+                                  <button
+                                    onClick={() => fetchQueries(selectedCourse.id, queryPagination.page + 1)}
+                                    disabled={queryPagination.page === queryPagination.totalPages}
+                                    className="px-3 py-2 bg-slate-700/50 text-white rounded-lg hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    <ChevronRight className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Empty State */}
                               {queries.length === 0 && (
-                                <div className="text-center py-8">
+                                <div className="text-center py-12">
                                   <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                                     <MessageCircle className="h-8 w-8 text-gray-400" />
                                   </div>
+                                  <h3 className="text-lg font-medium text-white mb-2">
+                                    {queryFilters.search || queryFilters.status !== 'all' || queryFilters.category !== 'all' || queryFilters.priority !== 'all'
+                                      ? "No queries match your filters"
+                                      : user.role === "teacher"
+                                        ? "No questions from students yet"
+                                        : "No questions posted yet"}
+                                  </h3>
                                   <p className="text-gray-400">
-                                    {user.role === "teacher"
-                                      ? "No questions from students yet."
-                                      : "You haven't asked any questions yet."}
+                                    {queryFilters.search || queryFilters.status !== 'all' || queryFilters.category !== 'all' || queryFilters.priority !== 'all'
+                                      ? "Try adjusting your search criteria or filters."
+                                      : user.role === "teacher"
+                                        ? "Student questions will appear here once they start asking."
+                                        : "Be the first to ask a question to your teachers!"}
                                   </p>
+                                  {(queryFilters.search || queryFilters.status !== 'all' || queryFilters.category !== 'all' || queryFilters.priority !== 'all') && (
+                                    <button
+                                      onClick={resetFilters}
+                                      className="mt-4 bg-purple-500 text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition-colors"
+                                    >
+                                      Clear Filters
+                                    </button>
+                                  )}
                                 </div>
                               )}
                             </div>
