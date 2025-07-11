@@ -166,10 +166,11 @@ async function createTables() {
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Add all missing columns to users table
+  // Add all missing columns to users table (including mobile)
   const userColumns = [
     { name: "status", type: "ENUM('active', 'blocked') DEFAULT 'active'" },
     { name: "created_by", type: "INT NULL" },
+    { name: "mobile", type: "VARCHAR(15) NULL" }, // Add this line
   ];
 
   for (const column of userColumns) {
@@ -716,7 +717,7 @@ app.post("/api/login", async (req, res) => {
     }
 
     const [users] = await db.execute(
-      "SELECT id, name, email, password, role, status FROM users WHERE email = ?",
+      "SELECT id, name, email, mobile, password, role, status FROM users WHERE email = ?", // Add mobile here
       [email]
     );
 
@@ -750,6 +751,7 @@ app.post("/api/login", async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
+        mobile: user.mobile, // Include mobile in response
         role: user.role,
         status: user.status,
       },
@@ -759,6 +761,50 @@ app.post("/api/login", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
+const validateMobile = (mobile) => {
+  if (!mobile) return true; // Optional field
+
+  // Remove all spaces, hyphens, parentheses for validation
+  const cleanMobile = mobile.replace(/[\s\-()]/g, '');
+
+  // Check if it's a valid format: optional + followed by 10-15 digits
+  const mobileRegex = /^(\+\d{1,3})?\d{10,15}$/;
+
+  return mobileRegex.test(cleanMobile);
+};
+app.post(
+  "/api/check-mobile",
+  authenticateToken,
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const { mobile } = req.body;
+      const { userId } = req.user;
+
+      if (!mobile) {
+        return res.json({ available: true });
+      }
+
+      if (!validateMobile(mobile)) {
+        return res.status(400).json({ message: "Invalid mobile number format" });
+      }
+
+      const [existing] = await db.execute(
+        "SELECT id FROM users WHERE mobile = ? AND id != ? AND mobile IS NOT NULL",
+        [mobile, userId]
+      );
+
+      res.json({
+        available: existing.length === 0,
+        message: existing.length > 0 ? "Mobile number already taken" : "Mobile number available"
+      });
+    } catch (error) {
+      console.error("Check mobile availability error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
 
 // Admin Routes - Delete Teacher
 app.delete(
@@ -982,15 +1028,32 @@ app.put(
   checkUserStatus,
   async (req, res) => {
     try {
-      const { name } = req.body;
+      const { name, mobile } = req.body; // Add mobile here
 
       if (!name) {
         return res.status(400).json({ message: "Name is required" });
       }
 
+      // Validate mobile number if provided
+      if (mobile && !/^[+]?[\d\s-()]{10,15}$/.test(mobile.replace(/\s/g, ''))) {
+        return res.status(400).json({ message: "Invalid mobile number format" });
+      }
+
+      // Check if mobile number already exists for another user
+      if (mobile) {
+        const [existingMobile] = await db.execute(
+          "SELECT id FROM users WHERE mobile = ? AND id != ? AND mobile IS NOT NULL",
+          [mobile, req.user.userId]
+        );
+
+        if (existingMobile.length > 0) {
+          return res.status(400).json({ message: "Mobile number already taken" });
+        }
+      }
+
       await db.execute(
-        "UPDATE users SET name = ? WHERE id = ? AND role = 'student'",
-        [name, req.user.userId]
+        "UPDATE users SET name = ?, mobile = ? WHERE id = ? AND role = 'student'",
+        [name, mobile || null, req.user.userId]
       );
 
       res.json({ message: "Profile updated successfully" });
@@ -1818,7 +1881,7 @@ app.get(
   async (req, res) => {
     try {
       const [teachers] = await db.execute(`
-      SELECT u.id, u.name, u.email, u.status, u.created_at,
+      SELECT u.id, u.name, u.email, u.mobile, u.status, u.created_at, -- Add mobile here
              COUNT(c.id) as course_count
       FROM users u
       LEFT JOIN courses c ON u.id = c.teacher_id
@@ -1834,6 +1897,94 @@ app.get(
     }
   }
 );
+app.post(
+  "/api/teacher/import-students",
+  authenticateToken,
+  requireRole(["teacher"]),
+  checkUserStatus,
+  upload.single("studentsFile"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const fileContent = fs.readFileSync(req.file.path, 'utf8');
+      const lines = fileContent.split('\n');
+
+      const students = [];
+      const errors = [];
+
+      for (let i = 1; i < lines.length; i++) { // Skip header
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        const [name, email, mobile] = line.split(',').map(item => item.trim());
+
+        if (!name || !email) {
+          errors.push(`Line ${i + 1}: Name and email are required`);
+          continue;
+        }
+
+        if (mobile && !validateMobile(mobile)) {
+          errors.push(`Line ${i + 1}: Invalid mobile number format for ${name}`);
+          continue;
+        }
+
+        students.push({ name, email, mobile: mobile || null });
+      }
+
+      if (errors.length > 0) {
+        return res.status(400).json({ message: "Validation errors", errors });
+      }
+
+      const results = [];
+      for (const student of students) {
+        try {
+          const tempPassword = generatePassword();
+          const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+          const [result] = await db.execute(
+            "INSERT INTO users (name, email, mobile, password, role, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+            [student.name, student.email, student.mobile, hashedPassword, "student", req.user.userId]
+          );
+
+          await db.execute(
+            "INSERT INTO user_credentials (user_id, temp_password) VALUES (?, ?)",
+            [result.insertId, tempPassword]
+          );
+
+          results.push({
+            ...student,
+            id: result.insertId,
+            password: tempPassword,
+            success: true
+          });
+        } catch (error) {
+          results.push({
+            ...student,
+            success: false,
+            error: error.message
+          });
+        }
+      }
+
+      // Clean up uploaded file
+      fs.unlinkSync(req.file.path);
+
+      res.json({
+        message: "Bulk import completed",
+        results,
+        successCount: results.filter(r => r.success).length,
+        errorCount: results.filter(r => !r.success).length
+      });
+    } catch (error) {
+      console.error("Bulk import error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
 
 app.put(
   "/api/admin/teacher/:teacherId/toggle-status",
@@ -1879,10 +2030,15 @@ app.post(
   checkUserStatus,
   async (req, res) => {
     try {
-      const { name, email } = req.body;
+      const { name, email, mobile } = req.body; // Add mobile here
 
       if (!name || !email) {
         return res.status(400).json({ message: "Name and email are required" });
+      }
+
+      // Validate mobile number if provided
+      if (mobile && !/^[+]?[\d\s-()]{10,15}$/.test(mobile.replace(/\s/g, ''))) {
+        return res.status(400).json({ message: "Invalid mobile number format" });
       }
 
       const [existingUser] = await db.execute(
@@ -1896,12 +2052,26 @@ app.post(
           .json({ message: "User already exists with this email" });
       }
 
+      // Check if mobile number already exists (if provided)
+      if (mobile) {
+        const [existingMobile] = await db.execute(
+          "SELECT id FROM users WHERE mobile = ? AND mobile IS NOT NULL",
+          [mobile]
+        );
+
+        if (existingMobile.length > 0) {
+          return res
+            .status(400)
+            .json({ message: "User already exists with this mobile number" });
+        }
+      }
+
       const tempPassword = generatePassword();
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
       const [result] = await db.execute(
-        "INSERT INTO users (name, email, password, role, created_by) VALUES (?, ?, ?, ?, ?)",
-        [name, email, hashedPassword, "student", req.user.userId]
+        "INSERT INTO users (name, email, mobile, password, role, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+        [name, email, mobile || null, hashedPassword, "student", req.user.userId]
       );
 
       await db.execute(
@@ -1942,6 +2112,7 @@ app.post(
     }
   }
 );
+
 app.post(
   "/api/resend-credentials",
   authenticateToken,
@@ -2056,7 +2227,7 @@ app.get(
     try {
       const [students] = await db.execute(
         `
-      SELECT u.id, u.name, u.email, u.status, u.created_at,
+      SELECT u.id, u.name, u.email, u.mobile, u.status, u.created_at, -- Add mobile here
              COUNT(DISTINCT ce.course_id) as enrolled_courses
       FROM users u
       LEFT JOIN course_enrollments ce ON u.id = ce.student_id
@@ -2149,6 +2320,7 @@ app.get(
       let query, params;
 
       if (req.user.role === "teacher") {
+        // Teachers see courses they created or where they are sub-teachers
         query = `
           SELECT DISTINCT c.*, u.name as teacher_name, 
                  COUNT(ce.student_id) as enrolled_students,
@@ -2162,20 +2334,30 @@ app.get(
           ORDER BY teacher_role, c.created_at DESC
         `;
         params = [req.user.userId, req.user.userId, req.user.userId];
+
       } else if (req.user.role === "student") {
-        query = `SELECT c.*, u.name as teacher_name, ce.enrolled_at, ce.completed_at
-               FROM courses c 
-               LEFT JOIN users u ON c.teacher_id = u.id
-               LEFT JOIN course_enrollments ce ON c.id = ce.course_id AND ce.student_id = ?`;
+        // Students see ONLY courses they are enrolled in
+        query = `
+          SELECT c.*, u.name as teacher_name, ce.enrolled_at, ce.completed_at
+          FROM courses c 
+          INNER JOIN users u ON c.teacher_id = u.id
+          INNER JOIN course_enrollments ce ON c.id = ce.course_id
+          WHERE ce.student_id = ?
+          ORDER BY ce.enrolled_at DESC
+        `;
         params = [req.user.userId];
-      } else {
+
+      } else if (req.user.role === "admin") {
         // Admin can see all courses
-        query = `SELECT c.*, u.name as teacher_name, 
-               COUNT(ce.student_id) as enrolled_students
-               FROM courses c 
-               LEFT JOIN users u ON c.teacher_id = u.id
-               LEFT JOIN course_enrollments ce ON c.id = ce.course_id
-               GROUP BY c.id`;
+        query = `
+          SELECT c.*, u.name as teacher_name, 
+                 COUNT(ce.student_id) as enrolled_students
+          FROM courses c 
+          LEFT JOIN users u ON c.teacher_id = u.id
+          LEFT JOIN course_enrollments ce ON c.id = ce.course_id
+          GROUP BY c.id
+          ORDER BY c.created_at DESC
+        `;
         params = [];
       }
 
@@ -2578,13 +2760,13 @@ app.get(
           .json({ message: "Course not found or not authorized" });
       }
 
-      // Rest of the existing function code remains the same
       const [students] = await db.execute(
         `
       SELECT 
         u.id, 
         u.name, 
         u.email, 
+        u.mobile, -- Add mobile here
         ce.enrolled_at, 
         ce.completed_at
       FROM course_enrollments ce
@@ -3493,10 +3675,10 @@ app.get(
   checkUserStatus,
   async (req, res) => {
     try {
-      const { q, courseId } = req.query; // search query and course ID
+      const { q, courseId, mobile } = req.query; // Add mobile search parameter
 
       let query = `
-        SELECT u.id, u.name, u.email 
+        SELECT u.id, u.name, u.email, u.mobile 
         FROM users u
         WHERE u.role = 'student' AND u.status = 'active'
       `;
@@ -3512,10 +3694,16 @@ app.get(
         params.push(courseId);
       }
 
-      // Add search filter
+      // Add search filter - search by name, email, or mobile
       if (q) {
-        query += ` AND (u.name LIKE ? OR u.email LIKE ?)`;
-        params.push(`%${q}%`, `%${q}%`);
+        query += ` AND (u.name LIKE ? OR u.email LIKE ? OR u.mobile LIKE ?)`;
+        params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+      }
+
+      // Mobile-specific search
+      if (mobile) {
+        query += ` AND u.mobile LIKE ?`;
+        params.push(`%${mobile}%`);
       }
 
       query += ` ORDER BY u.name LIMIT 10`;
@@ -3593,6 +3781,7 @@ async function generateCertificate(
       const doc = new PDFDocument({
         size: "A4",
         layout: "landscape",
+        margin: 30,
         info: {
           Title: `Certificate of Completion - ${courseName}`,
           Author: 'Learning Management System',
@@ -3603,88 +3792,238 @@ async function generateCertificate(
       doc.pipe(stream);
 
       // Colors
-      const darkBlue = '#2c3e50';
-      const gold = '#f39c12';
-      const lightBlue = '#3498db';
-      const darkGray = '#34495e';
+      const primaryBlue = '#1e40af';
+      const accentGold = '#f59e0b';
+      const deepNavy = '#1e293b';
+      const lightGray = '#f1f5f9';
+      const darkGray = '#475569';
 
-      // Certificate border
-      doc.rect(30, 30, doc.page.width - 60, doc.page.height - 60)
-        .lineWidth(3)
-        .stroke(darkBlue);
+      // Page dimensions
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+      const centerX = pageWidth / 2;
 
-      doc.rect(40, 40, doc.page.width - 80, doc.page.height - 80)
-        .lineWidth(1)
-        .stroke(darkBlue);
+      // Decorative border with gradient effect
+      doc.rect(20, 20, pageWidth - 40, pageHeight - 40)
+        .lineWidth(4)
+        .stroke(primaryBlue);
 
-      // Header
-      doc.fontSize(42)
-        .fillColor(darkBlue)
-        .font('Helvetica-Bold')
-        .text("CERTIFICATE", 0, 100, { align: "center" });
-
-      doc.fontSize(24)
-        .fillColor(gold)
-        .text("OF COMPLETION", 0, 150, { align: "center" });
-
-      // Decorative line
-      doc.moveTo(200, 190)
-        .lineTo(doc.page.width - 200, 190)
+      doc.rect(30, 30, pageWidth - 60, pageHeight - 60)
         .lineWidth(2)
-        .stroke(gold);
+        .stroke(accentGold);
 
-      // Main content
-      doc.fontSize(18)
+      doc.rect(35, 35, pageWidth - 70, pageHeight - 70)
+        .lineWidth(1)
+        .stroke(darkGray);
+
+      // Header background with decorative element
+      doc.rect(40, 40, pageWidth - 80, 80)
+        .fill(lightGray)
+        .stroke(primaryBlue, 1);
+
+      // Institution/System Header
+      doc.fontSize(24)
+        .fillColor(primaryBlue)
+        .font('Helvetica-Bold')
+        .text("LEARNING MANAGEMENT SYSTEM", 50, 60, {
+          align: "center",
+          width: pageWidth - 100
+        });
+
+      doc.fontSize(12)
         .fillColor(darkGray)
         .font('Helvetica')
-        .text("This is to certify that", 0, 230, { align: "center" });
+        .text("Professional Learning Excellence", 50, 90, {
+          align: "center",
+          width: pageWidth - 100
+        });
 
-      doc.fontSize(36)
-        .fillColor(darkBlue)
+      // Main Certificate Title
+      doc.fontSize(48)
+        .fillColor(primaryBlue)
         .font('Helvetica-Bold')
-        .text(studentName, 0, 270, { align: "center" });
+        .text("CERTIFICATE", 50, 150, {
+          align: "center",
+          width: pageWidth - 100
+        });
 
-      doc.fontSize(18)
-        .fillColor(darkGray)
+      doc.fontSize(22)
+        .fillColor(accentGold)
+        .font('Helvetica-Bold')
+        .text("OF COMPLETION", 50, 200, {
+          align: "center",
+          width: pageWidth - 100
+        });
+
+      // Decorative line with ornaments
+      const lineY = 235;
+      const lineStartX = 120;
+      const lineEndX = pageWidth - 120;
+
+      // Central decorative line
+      doc.moveTo(lineStartX, lineY)
+        .lineTo(lineEndX, lineY)
+        .lineWidth(3)
+        .stroke(accentGold);
+
+      // Ornamental circles at line ends
+      doc.circle(lineStartX - 10, lineY, 5)
+        .fillAndStroke(accentGold, accentGold);
+      doc.circle(lineEndX + 10, lineY, 5)
+        .fillAndStroke(accentGold, accentGold);
+
+      // Achievement statement
+      doc.fontSize(16)
+        .fillColor(deepNavy)
         .font('Helvetica')
-        .text("has successfully completed the course", 0, 320, { align: "center" });
+        .text("This is to certify that", 50, 265, {
+          align: "center",
+          width: pageWidth - 100
+        });
 
-      doc.fontSize(28)
-        .fillColor(lightBlue)
+      // Student name with decorative background
+      const nameY = 295;
+      const nameBoxWidth = pageWidth - 160;
+      const nameBoxHeight = 45;
+
+      doc.rect(80, nameY - 5, nameBoxWidth, nameBoxHeight)
+        .fill('#f8fafc')
+        .stroke(primaryBlue, 1);
+
+      doc.fontSize(32)
+        .fillColor(primaryBlue)
         .font('Helvetica-Bold')
-        .text(courseName, 0, 360, { align: "center", width: doc.page.width });
+        .text(studentName, 90, nameY + 8, {
+          align: "center",
+          width: nameBoxWidth - 20
+        });
 
-      // Dates section
-      const dateY = 420;
+      // Course completion statement
+      doc.fontSize(16)
+        .fillColor(deepNavy)
+        .font('Helvetica')
+        .text("has successfully completed the course", 50, 365, {
+          align: "center",
+          width: pageWidth - 100
+        });
+
+      // Course name with emphasis
+      doc.fontSize(24)
+        .fillColor(accentGold)
+        .font('Helvetica-Bold')
+        .text(courseName, 50, 390, {
+          align: "center",
+          width: pageWidth - 100
+        });
+
+      // Achievement description
       doc.fontSize(14)
         .fillColor(darkGray)
-        .font('Helvetica');
+        .font('Helvetica')
+        .text("demonstrating competency and dedication in the subject matter", 50, 425, {
+          align: "center",
+          width: pageWidth - 100
+        });
+
+      // Date and certificate info section
+      const infoY = 455;
+      doc.fontSize(13)
+        .fillColor(deepNavy)
+        .font('Helvetica-Bold');
 
       if (courseEndDate) {
-        doc.text(`Course Completion Date: ${courseEndDate}`, 0, dateY, { align: "center" });
-        doc.text(`Certificate Issued: ${completionDate}`, 0, dateY + 20, { align: "center" });
+        doc.text(`Course Completion: ${courseEndDate}`, 50, infoY, {
+          align: "center",
+          width: pageWidth - 100
+        });
+        doc.text(`Certificate Issued: ${completionDate}`, 50, infoY + 18, {
+          align: "center",
+          width: pageWidth - 100
+        });
       } else {
-        doc.text(`Completion Date: ${completionDate}`, 0, dateY, { align: "center" });
+        doc.text(`Date of Completion: ${completionDate}`, 50, infoY + 9, {
+          align: "center",
+          width: pageWidth - 100
+        });
       }
 
-      // Certificate code
-      doc.fontSize(12)
-        .fillColor('#7f8c8d')
-        .text(`Certificate Code: ${certificateCode}`, 0, 480, { align: "center" });
+      // Certificate authentication section
+      const authY = 510;
 
-      // Footer
-      doc.fontSize(10)
-        .fillColor('#95a5a6')
-        .text("This certificate is digitally generated and verified by Learning Management System", 0, 520, { align: "center" });
-
-      // Signature area (decorative)
-      doc.fontSize(12)
+      // Left side - Digital signature placeholder
+      doc.fontSize(11)
         .fillColor(darkGray)
-        .text("Authorized Signature", doc.page.width - 200, 460, { align: "center", width: 150 });
+        .font('Helvetica-Bold')
+        .text("Authorized Signature", 80, authY);
 
-      doc.moveTo(doc.page.width - 200, 490)
-        .lineTo(doc.page.width - 50, 490)
+      doc.moveTo(80, authY + 20)
+        .lineTo(220, authY + 20)
+        .lineWidth(1)
         .stroke(darkGray);
+
+      doc.fontSize(10)
+        .fillColor(darkGray)
+        .font('Helvetica')
+        .text("Academic Director", 80, authY + 25);
+
+      // Right side - Certificate seal/emblem placeholder
+      doc.fontSize(11)
+        .fillColor(darkGray)
+        .font('Helvetica-Bold')
+        .text("Official Seal", pageWidth - 220, authY);
+
+      // Decorative seal circle
+      doc.circle(pageWidth - 150, authY + 15, 20)
+        .lineWidth(2)
+        .stroke(primaryBlue);
+
+      doc.fontSize(8)
+        .fillColor(primaryBlue)
+        .font('Helvetica-Bold')
+        .text("LMS", pageWidth - 158, authY + 10);
+
+      doc.fontSize(6)
+        .fillColor(primaryBlue)
+        .font('Helvetica')
+        .text("CERTIFIED", pageWidth - 168, authY + 22);
+
+      // Certificate code and verification
+      doc.fontSize(10)
+        .fillColor('#64748b')
+        .font('Helvetica')
+        .text(`Certificate ID: ${certificateCode}`, 50, pageHeight - 80, {
+          align: "center",
+          width: pageWidth - 100
+        });
+
+      // Footer with verification info
+      doc.fontSize(8)
+        .fillColor('#94a3b8')
+        .font('Helvetica')
+        .text("This certificate is digitally generated and can be verified online", 50, pageHeight - 60, {
+          align: "center",
+          width: pageWidth - 100
+        });
+
+      doc.text(`Generated on ${new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      })}`, 50, pageHeight - 45, {
+        align: "center",
+        width: pageWidth - 100
+      });
+
+      // Watermark/background pattern (subtle)
+      doc.save();
+      doc.opacity(0.05);
+      doc.fontSize(100)
+        .fillColor(primaryBlue)
+        .font('Helvetica-Bold')
+        .text("CERTIFIED", centerX - 200, pageHeight / 2 - 60, {
+          rotate: -15
+        });
+      doc.restore();
 
       doc.end();
 
@@ -3695,7 +4034,6 @@ async function generateCertificate(
     }
   });
 }
-
 async function generateCertificateForProject(studentId, courseId) {
   try {
     const [existingCert] = await db.execute(
@@ -3783,7 +4121,7 @@ app.get(
   async (req, res) => {
     try {
       const [user] = await db.execute(
-        "SELECT id, name, email, role, status, created_at FROM users WHERE id = ?",
+        "SELECT id, name, email, mobile, role, status, created_at FROM users WHERE id = ?", // Add mobile here
         [req.user.userId]
       );
 
@@ -3902,7 +4240,7 @@ app.get(
         const [certificateCount] = await db.execute(
           "SELECT COUNT(*) as count FROM certificates"
         );
-        
+
         // Admin query statistics
         const [queryStats] = await db.execute(
           `SELECT 
@@ -4088,105 +4426,105 @@ app.get(
         };
 
       } else if (req.user.role === "student") {
+        // Only count courses where student is actually enrolled
         const [enrolledCount] = await db.execute(
           "SELECT COUNT(*) as count FROM course_enrollments WHERE student_id = ?",
           [req.user.userId]
         );
-        
+
         const [completedCount] = await db.execute(
           "SELECT COUNT(*) as count FROM course_enrollments WHERE student_id = ? AND completed_at IS NOT NULL",
           [req.user.userId]
         );
-        
+
         const [certificateCount] = await db.execute(
           "SELECT COUNT(*) as count FROM certificates WHERE student_id = ?",
           [req.user.userId]
         );
-        
+
         const [projectCount] = await db.execute(
           "SELECT COUNT(*) as count FROM projects WHERE student_id = ?",
           [req.user.userId]
         );
+
+        // Count videos only from enrolled courses
         const [watchedVideoCount] = await db.execute(
-          `
-          SELECT COUNT(*) as count 
-          FROM video_watch_progress vwp
-          JOIN course_videos cv ON vwp.video_id = cv.id
-          JOIN course_enrollments ce ON cv.course_id = ce.course_id
-          WHERE ce.student_id = ? AND vwp.completed = TRUE
-        `,
+          `SELECT COUNT(DISTINCT vwp.video_id) as count 
+     FROM video_watch_progress vwp
+     JOIN course_videos cv ON vwp.video_id = cv.id
+     JOIN course_enrollments ce ON cv.course_id = ce.course_id
+     WHERE ce.student_id = ? AND vwp.completed = TRUE`,
           [req.user.userId]
         );
 
-        // Student assignment statistics
+        // Student assignment statistics - only from enrolled courses
         const [assignmentStats] = await db.execute(
           `SELECT 
-            COUNT(DISTINCT a.id) as available_assignments,
-            COUNT(DISTINCT asub.assignment_id) as submitted_assignments,
-            COUNT(CASE WHEN asub.status = 'approved' THEN 1 END) as approved_assignments,
-            COUNT(CASE WHEN asub.status = 'submitted' THEN 1 END) as pending_assignments
-           FROM assignments a
-           JOIN courses c ON a.course_id = c.id
-           JOIN course_enrollments ce ON c.id = ce.course_id
-           LEFT JOIN assignment_submissions asub ON a.id = asub.assignment_id AND asub.student_id = ?
-           WHERE ce.student_id = ?`,
+      COUNT(DISTINCT a.id) as available_assignments,
+      COUNT(DISTINCT asub.assignment_id) as submitted_assignments,
+      COUNT(CASE WHEN asub.status = 'approved' THEN 1 END) as approved_assignments,
+      COUNT(CASE WHEN asub.status = 'submitted' THEN 1 END) as pending_assignments
+     FROM assignments a
+     JOIN course_enrollments ce ON a.course_id = ce.course_id AND ce.student_id = ?
+     LEFT JOIN assignment_submissions asub ON a.id = asub.assignment_id AND asub.student_id = ?`,
           [req.user.userId, req.user.userId]
         );
 
-        // Student query statistics
+        // Student query statistics - only from enrolled courses
         const [queryStats] = await db.execute(
           `SELECT 
-            COUNT(*) as my_queries,
-            COUNT(CASE WHEN status = 'answered' THEN 1 END) as answered_queries,
-            COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_queries,
-            COUNT(CASE WHEN priority = 'high' THEN 1 END) as high_priority_queries,
-            COALESCE(SUM(helpful_votes), 0) as total_helpful_votes
-           FROM course_queries 
-           WHERE student_id = ?`,
-          [req.user.userId]
+      COUNT(*) as my_queries,
+      COUNT(CASE WHEN cq.status = 'answered' THEN 1 END) as answered_queries,
+      COUNT(CASE WHEN cq.status = 'pending' THEN 1 END) as pending_queries,
+      COUNT(CASE WHEN cq.priority = 'high' THEN 1 END) as high_priority_queries,
+      COALESCE(SUM(cq.helpful_votes), 0) as total_helpful_votes
+     FROM course_queries cq
+     JOIN course_enrollments ce ON cq.course_id = ce.course_id AND ce.student_id = ?
+     WHERE cq.student_id = ?`,
+          [req.user.userId, req.user.userId]
         );
 
-        // Student attendance statistics
+        // Student attendance statistics - only from enrolled courses
         const [attendanceStats] = await db.execute(
           `SELECT 
-            COUNT(*) as total_sessions_attended,
-            COUNT(CASE WHEN sa.status = 'present' THEN 1 END) as present_count,
-            COUNT(CASE WHEN sa.status = 'absent' THEN 1 END) as absent_count,
-            COUNT(CASE WHEN sa.status = 'late' THEN 1 END) as late_count
-           FROM student_attendance sa
-           WHERE sa.student_id = ?`,
-          [req.user.userId]
+      COUNT(*) as total_sessions_attended,
+      COUNT(CASE WHEN sa.status = 'present' THEN 1 END) as present_count,
+      COUNT(CASE WHEN sa.status = 'absent' THEN 1 END) as absent_count,
+      COUNT(CASE WHEN sa.status = 'late' THEN 1 END) as late_count
+     FROM student_attendance sa
+     JOIN course_enrollments ce ON sa.course_id = ce.course_id AND ce.student_id = ?
+     WHERE sa.student_id = ?`,
+          [req.user.userId, req.user.userId]
         );
 
         // Student receipt statistics
         const [receiptStats] = await db.execute(
           `SELECT 
-            COUNT(*) as my_receipts,
-            COALESCE(SUM(total_amount), 0) as total_paid
-           FROM payment_receipts 
-           WHERE student_id = ?`,
+      COUNT(*) as my_receipts,
+      COALESCE(SUM(total_amount), 0) as total_paid
+     FROM payment_receipts 
+     WHERE student_id = ?`,
           [req.user.userId]
         );
 
-        // Session interaction statistics
+        // Session interaction statistics - only from enrolled courses
         const [sessionStats] = await db.execute(
           `SELECT 
-            COUNT(DISTINCT sa.session_id) as total_sessions,
-            COUNT(CASE WHEN sa.marked_read = 1 THEN 1 END) as sessions_read,
-            COUNT(CASE WHEN sa.joined_meet = 1 THEN 1 END) as meetings_joined
-           FROM session_attendance sa
-           JOIN daily_sessions ds ON sa.session_id = ds.id
-           JOIN course_enrollments ce ON ds.course_id = ce.course_id
-           WHERE sa.student_id = ? AND ce.student_id = ?`,
+      COUNT(DISTINCT sa.session_id) as total_sessions,
+      COUNT(CASE WHEN sa.marked_read = 1 THEN 1 END) as sessions_read,
+      COUNT(CASE WHEN sa.joined_meet = 1 THEN 1 END) as meetings_joined
+     FROM session_attendance sa
+     JOIN daily_sessions ds ON sa.session_id = ds.id
+     JOIN course_enrollments ce ON ds.course_id = ce.course_id AND ce.student_id = ?
+     WHERE sa.student_id = ?`,
           [req.user.userId, req.user.userId]
         );
 
-        // Calculate attendance percentage
-        const attendancePercentage = attendanceStats[0].total_sessions_attended > 0 
+        // Calculate percentages
+        const attendancePercentage = attendanceStats[0].total_sessions_attended > 0
           ? Math.round((attendanceStats[0].present_count / attendanceStats[0].total_sessions_attended) * 100)
           : 0;
 
-        // Calculate assignment completion percentage
         const assignmentCompletionPercentage = assignmentStats[0].available_assignments > 0
           ? Math.round((assignmentStats[0].submitted_assignments / assignmentStats[0].available_assignments) * 100)
           : 0;
@@ -4215,7 +4553,7 @@ app.get(
           meetingsJoined: sessionStats[0].meetings_joined || 0,
           myReceipts: receiptStats[0].my_receipts || 0,
           totalPaid: receiptStats[0].total_paid || 0,
-          watchedVideos: watchedVideoCount[0].count,
+          watchedVideos: watchedVideoCount[0].count || 0,
         };
       }
 
@@ -4544,7 +4882,7 @@ app.put(
         [answer.trim(), req.user.userId, newStatus, queryId]
       );
 
-      res.json({ 
+      res.json({
         message: closeQuery ? "Query answered and closed successfully" : "Query answered successfully"
       });
     } catch (error) {
@@ -4905,7 +5243,7 @@ app.post(
         } else if (url.hostname.includes('youtube.com')) {
           videoId = url.searchParams.get('v');
         }
-        
+
         if (!videoId) {
           return res.status(400).json({ message: "Could not extract video ID from YouTube URL" });
         }

@@ -734,6 +734,7 @@ const LearningManagementSystem = () => {
   const [studentForm, setStudentForm] = useState({
     name: "",
     email: "",
+    mobile: "",
   });
 
   const [passwordForm, setPasswordForm] = useState({
@@ -744,6 +745,7 @@ const LearningManagementSystem = () => {
 
   const [profileForm, setProfileForm] = useState({
     name: "",
+    mobile: "",
   });
 
   const [studentEmail, setStudentEmail] = useState("");
@@ -1068,6 +1070,143 @@ const LearningManagementSystem = () => {
     return data;
   };
 
+  const validateMobileNumber = (mobile) => {
+    if (!mobile) return true; // Optional field
+
+    // Remove all spaces, hyphens, parentheses for validation
+    const cleanMobile = mobile.replace(/[\s\-()]/g, '');
+
+    // Check if it's a valid format: optional + followed by 10-15 digits
+    const mobileRegex = /^(\+\d{1,3})?\d{10,15}$/;
+
+    return mobileRegex.test(cleanMobile);
+  };
+  const formatMobileDisplay = (mobile) => {
+    if (!mobile) return '';
+
+    // If it's an Indian number without country code, add +91
+    if (mobile.length === 10 && /^\d{10}$/.test(mobile)) {
+      return `+91 ${mobile.substring(0, 5)} ${mobile.substring(5)}`;
+    }
+
+    // If it already has country code, format it nicely
+    if (mobile.startsWith('+91') && mobile.length === 13) {
+      const number = mobile.substring(3);
+      return `+91 ${number.substring(0, 5)} ${number.substring(5)}`;
+    }
+
+    return mobile; // Return as-is for other formats
+  };
+
+  const resetTeacherForm = () => {
+    setTeacherForm({ name: "", email: "" });
+  };
+
+  const resetStudentForm = () => {
+    setStudentForm({ name: "", email: "", mobile: "" });
+  };
+  const searchStudentsByMobile = async (mobileQuery) => {
+    try {
+      const data = await apiCall(`/students/search?mobile=${encodeURIComponent(mobileQuery)}`);
+      return data;
+    } catch (error) {
+      console.error("Search by mobile error:", error);
+      return [];
+    }
+  };
+  const EnhancedStudentSearchInput = ({ value, onChange, onSelect, placeholder, courseId }) => {
+    const [suggestions, setSuggestions] = useState([]);
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [loading, setLoading] = useState(false);
+
+    const searchStudents = async (query) => {
+      if (!query.trim()) {
+        setSuggestions([]);
+        setShowSuggestions(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const token = localStorage.getItem("token");
+        let url = `${API_BASE}/students/search?q=${encodeURIComponent(query)}`;
+        if (courseId) {
+          url += `&courseId=${courseId}`;
+        }
+
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        const data = await response.json();
+        setSuggestions(data);
+        setShowSuggestions(true);
+      } catch (error) {
+        console.error("Search students error:", error);
+        setSuggestions([]);
+      }
+      setLoading(false);
+    };
+
+    const handleInputChange = (e) => {
+      const newValue = e.target.value;
+      onChange(newValue);
+      searchStudents(newValue);
+    };
+
+    const handleSelectStudent = (student) => {
+      onSelect(student);
+      setShowSuggestions(false);
+    };
+
+    return (
+      <div className="relative">
+        <input
+          type="text"
+          placeholder={placeholder}
+          value={value}
+          onChange={handleInputChange}
+          onFocus={() => value && setShowSuggestions(true)}
+          onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+          className="flex-1 px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white w-full"
+          required
+        />
+
+        {loading && (
+          <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+            <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+          </div>
+        )}
+
+        {showSuggestions && suggestions.length > 0 && (
+          <div className="absolute z-10 w-full mt-1 bg-slate-800 border border-white/20 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+            {suggestions.map((student) => (
+              <div
+                key={student.id}
+                onClick={() => handleSelectStudent(student)}
+                className="px-4 py-3 hover:bg-slate-700/50 cursor-pointer border-b border-white/10 last:border-b-0"
+              >
+                <div className="font-medium text-white">{student.name}</div>
+                <div className="text-sm text-gray-400">{student.email}</div>
+                {student.mobile && (
+                  <div className="text-sm text-gray-400">📱 {formatMobileDisplay(student.mobile)}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showSuggestions && suggestions.length === 0 && value.trim() && !loading && (
+          <div className="absolute z-10 w-full mt-1 bg-slate-800 border border-white/20 rounded-xl shadow-lg">
+            <div className="px-4 py-3 text-gray-400 text-sm">
+              No students found or all students are already enrolled
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
   // Add these API functions after existing API functions
 
   const fetchVideos = async (courseId) => {
@@ -2133,6 +2272,13 @@ const LearningManagementSystem = () => {
     setLoading(true);
 
     try {
+      // Validate mobile number format if provided
+      if (studentForm.mobile && !/^[+]?[\d\s-()]{10,15}$/.test(studentForm.mobile.replace(/\s/g, ''))) {
+        showMessage("Please enter a valid mobile number", "error");
+        setLoading(false);
+        return;
+      }
+
       const data = await apiCall("/teacher/create-student", {
         method: "POST",
         body: JSON.stringify(studentForm),
@@ -2162,7 +2308,7 @@ const LearningManagementSystem = () => {
       }
 
       setShowCredentials(data.credentials);
-      setStudentForm({ name: "", email: "" });
+      setStudentForm({ name: "", email: "", mobile: "" }); // Reset with mobile
       fetchTeacherStudents();
     } catch (error) {
       showMessage(error.message, "error");
@@ -2170,6 +2316,7 @@ const LearningManagementSystem = () => {
 
     setLoading(false);
   };
+
 
   // Resend credentials function
   const resendCredentials = async (userId, userEmail) => {
@@ -2647,6 +2794,13 @@ const LearningManagementSystem = () => {
     setLoading(true);
 
     try {
+      // Validate mobile number format if provided
+      if (profileForm.mobile && !/^[+]?[\d\s-()]{10,15}$/.test(profileForm.mobile.replace(/\s/g, ''))) {
+        showMessage("Please enter a valid mobile number", "error");
+        setLoading(false);
+        return;
+      }
+
       await apiCall("/student/profile", {
         method: "PUT",
         body: JSON.stringify(profileForm),
@@ -2655,7 +2809,7 @@ const LearningManagementSystem = () => {
       showMessage("Profile updated successfully!", "success");
 
       // Update user data in localStorage
-      const updatedUser = { ...user, name: profileForm.name };
+      const updatedUser = { ...user, name: profileForm.name, mobile: profileForm.mobile };
       localStorage.setItem("user", JSON.stringify(updatedUser));
       setUser(updatedUser);
     } catch (error) {
@@ -2822,7 +2976,7 @@ const LearningManagementSystem = () => {
           fetchReceipts(),
           fetchChatHistory(),
         ]);
-        setProfileForm({ name: userData.name });
+        setProfileForm({ name: userData.name, mobile: userData.mobile || "" });
       }
     } catch (error) {
       showMessage("Error loading initial data", "error");
@@ -4556,6 +4710,26 @@ const LearningManagementSystem = () => {
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Mobile Number
+                        </label>
+                        <input
+                          type="tel"
+                          value={profileForm.mobile}
+                          onChange={(e) =>
+                            setProfileForm({
+                              ...profileForm,
+                              mobile: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                          placeholder="+91 9876543210 or 10-digit number"
+                        />
+                        <p className="text-xs text-gray-400 mt-1">
+                          Format: +91 9876543210 or 9876543210 (10-15 digits)
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
                           Role
                         </label>
                         <div className="px-4 py-3 bg-slate-700/30 rounded-xl text-gray-400 border border-white/10 capitalize">
@@ -4601,6 +4775,14 @@ const LearningManagementSystem = () => {
                       </label>
                       <div className="px-4 py-3 bg-slate-700/30 rounded-xl text-white border border-white/10">
                         {user.email}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Mobile Number
+                      </label>
+                      <div className="px-4 py-3 bg-slate-700/30 rounded-xl text-white border border-white/10">
+                        {user.mobile || "Not provided"}
                       </div>
                     </div>
                     <div>
@@ -5064,6 +5246,26 @@ const LearningManagementSystem = () => {
                       />
                     </div>
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Mobile Number (Optional)
+                    </label>
+                    <input
+                      type="tel"
+                      value={studentForm.mobile}
+                      onChange={(e) =>
+                        setStudentForm({
+                          ...studentForm,
+                          mobile: e.target.value,
+                        })
+                      }
+                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                      placeholder="+91 9876543210 or 10-digit number"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Format: +91 9876543210 or 9876543210 (10-15 digits)
+                    </p>
+                  </div>
                   <button
                     type="submit"
                     disabled={loading}
@@ -5097,6 +5299,11 @@ const LearningManagementSystem = () => {
                           <p className="text-sm text-gray-400">
                             {student.email}
                           </p>
+                          {student.mobile && (
+                            <p className="text-sm text-gray-400">
+                              📱 {student.mobile}
+                            </p>
+                          )}
                           <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
                             <span>
                               Enrolled Courses: {student.enrolled_courses || 0}
@@ -6560,7 +6767,12 @@ const LearningManagementSystem = () => {
                                       <p className="text-sm text-gray-400">
                                         {student.email}
                                       </p>
-                                      <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
+                                      {student.mobile && (
+                                        <p className="text-sm text-gray-400">
+                                          📱 {student.mobile}
+                                        </p>
+                                      )}
+                                      <div className="flex items-center space-x-4 text-sm text-gray-500 mt-2">
                                         <span>
                                           Enrolled: {new Date(student.enrolled_at).toLocaleDateString()}
                                         </span>
@@ -8541,11 +8753,21 @@ const LearningManagementSystem = () => {
                 /* Courses List */
                 <div className="space-y-6">
                   <div className="flex justify-between items-center">
-                    <h2 className="text-2xl font-bold text-white">
-                      {user.role === "teacher"
-                        ? "My Courses"
-                        : "Enrolled Courses"}
-                    </h2>
+                    <div>
+                      <h2 className="text-2xl font-bold text-white">
+                        {user.role === "teacher"
+                          ? "My Courses"
+                          : "My Enrolled Courses"}
+                      </h2>
+                      {user.role === "student" && (
+                        <p className="text-gray-400 text-sm mt-1">
+                          {courses.length > 0
+                            ? `Enrolled in ${courses.length} course${courses.length > 1 ? 's' : ''}`
+                            : 'Not enrolled in any courses yet'
+                          }
+                        </p>
+                      )}
+                    </div>
                     {user.role === "teacher" && (
                       <button
                         onClick={() => setSelectedCourse("create")}
@@ -8557,102 +8779,143 @@ const LearningManagementSystem = () => {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {courses.map((course) => (
-                      <div
-                        key={course.id}
-                        onClick={() => {
-                          setSelectedCourse(course);
-                          setActiveTab("overview");
-                        }}
-                        // className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 cursor-pointer hover:bg-slate-700/50 transition-all duration-200 border border-white/10 hover:border-purple-500/30 group"
-                        className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 cursor-pointer hover:bg-slate-700/50 transition-all duration-200 border border-white/10 hover:border-purple-500/30 group relative"
-                      >
-                        {/* Group Link Indicator */}
-                        {course.group_link && (
-                          <div className="absolute top-4 right-4">
-                            <div className="bg-green-500/20 text-green-300 px-2 py-1 rounded-full text-xs border border-green-500/30 flex items-center">
-                              <Users className="h-3 w-3 mr-1" />
-                              Group
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex items-center mb-4">
-                          <div className="h-12 w-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-xl flex items-center justify-center mr-3">
-                            <BookOpen className="h-6 w-6 text-white" />
-                          </div>
-                          <div className="flex-1">
-                            <h3 className="font-semibold text-white text-lg group-hover:text-purple-300 transition-colors">
-                              {course.title}
-                            </h3>
-                            <p className="text-sm text-gray-400 line-clamp-2">
-                              {course.description}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2 text-sm text-gray-400">
-                          {user.role === "teacher" && (
-                            <div className="flex justify-between">
-                              <span>
-                                Students: {course.enrolled_students || 0}
-                              </span>
-                              <span>Duration: {course.duration_days} days</span>
+                  {courses.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {courses.map((course) => (
+                        <div
+                          key={course.id}
+                          onClick={() => {
+                            setSelectedCourse(course);
+                            setActiveTab("overview");
+                          }}
+                          className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 cursor-pointer hover:bg-slate-700/50 transition-all duration-200 border border-white/10 hover:border-purple-500/30 group relative"
+                        >
+                          {/* Enrollment Status for Students */}
+                          {user.role === "student" && (
+                            <div className="absolute top-4 right-4">
+                              {course.completed_at ? (
+                                <div className="bg-green-500/20 text-green-300 px-3 py-1 rounded-full text-xs border border-green-500/30 flex items-center">
+                                  <CheckCircle className="h-3 w-3 mr-1" />
+                                  Completed
+                                </div>
+                              ) : (
+                                <div className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-full text-xs border border-blue-500/30 flex items-center">
+                                  <Clock className="h-3 w-3 mr-1" />
+                                  In Progress
+                                </div>
+                              )}
                             </div>
                           )}
 
-                          {user.role === "student" && (
-                            <div className="flex justify-between items-center">
-                              <span>Teacher: {course.teacher_name}</span>
-                              <div className="flex items-center space-x-2">
-                                {course.group_link && (
-                                  <span className="flex items-center text-green-400 text-xs">
-                                    <Users className="h-3 w-3 mr-1" />
-                                    Group Available
-                                  </span>
-                                )}
-                                {course.completed_at && (
-                                  <span className="flex items-center text-green-400">
-                                    <CheckCircle className="h-4 w-4 mr-1" />
-                                    Completed
-                                  </span>
-                                )}
+                          {/* Group Link Indicator for Teachers */}
+                          {user.role === "teacher" && course.group_link && (
+                            <div className="absolute top-4 right-4">
+                              <div className="bg-green-500/20 text-green-300 px-2 py-1 rounded-full text-xs border border-green-500/30 flex items-center">
+                                <Users className="h-3 w-3 mr-1" />
+                                Group
                               </div>
                             </div>
                           )}
 
-                          <div className="flex justify-between items-center pt-2 border-t border-white/10">
-                            <span>
-                              Created:{" "}
-                              {new Date(course.created_at).toLocaleDateString()}
-                            </span>
-                            <div className="flex items-center space-x-2">
-                              {course.group_link && (
-                                <span className="text-green-400 text-xs">📱</span>
-                              )}
-                              <span className="text-purple-400 group-hover:text-purple-300 font-medium">
+                          <div className="flex items-center mb-4">
+                            <div className="h-12 w-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-xl flex items-center justify-center mr-3">
+                              <BookOpen className="h-6 w-6 text-white" />
+                            </div>
+                            <div className="flex-1">
+                              <h3 className="font-semibold text-white text-lg group-hover:text-purple-300 transition-colors line-clamp-1">
+                                {course.title}
+                              </h3>
+                              <p className="text-sm text-gray-400 line-clamp-2 mt-1">
+                                {course.description}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 text-sm text-gray-400">
+                            {user.role === "teacher" && (
+                              <div className="flex justify-between">
+                                <span>Students: {course.enrolled_students || 0}</span>
+                                <span>Duration: {course.duration_days} days</span>
+                              </div>
+                            )}
+
+                            {user.role === "student" && (
+                              <div className="space-y-2">
+                                <div className="flex justify-between">
+                                  <span>Teacher:</span>
+                                  <span className="text-white font-medium">{course.teacher_name}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Enrolled:</span>
+                                  <span className="text-white">
+                                    {new Date(course.enrolled_at).toLocaleDateString()}
+                                  </span>
+                                </div>
+                                {course.completed_at && (
+                                  <div className="flex justify-between">
+                                    <span>Completed:</span>
+                                    <span className="text-green-300">
+                                      {new Date(course.completed_at).toLocaleDateString()}
+                                    </span>
+                                  </div>
+                                )}
+                                {course.group_link && (
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-green-400 text-xs flex items-center">
+                                      <Users className="h-3 w-3 mr-1" />
+                                      Study Group Available
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <div className="flex justify-between items-center pt-2 border-t border-white/10">
+                              <span className="text-xs">
+                                Created: {new Date(course.created_at).toLocaleDateString()}
+                              </span>
+                              <span className="text-purple-400 group-hover:text-purple-300 font-medium text-sm">
                                 View Details →
                               </span>
                             </div>
                           </div>
                         </div>
+                      ))}
+                    </div>
+                  ) : (
+                    /* Enhanced Empty State */
+                    <div className="text-center py-16">
+                      <div className="h-20 w-20 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <BookOpen className="h-10 w-10 text-gray-400" />
                       </div>
-                    ))}
-                  </div>
-
-                  {courses.length === 0 && (
-                    <div className="text-center py-12">
-                      <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                        <BookOpen className="h-8 w-8 text-gray-400" />
-                      </div>
-                      <h3 className="text-lg font-medium text-white mb-2">
-                        No courses available
+                      <h3 className="text-xl font-medium text-white mb-3">
+                        {user.role === "teacher" ? "No courses created yet" : "Not enrolled in any courses"}
                       </h3>
-                      <p className="text-gray-400">
+                      <p className="text-gray-400 mb-6 max-w-md mx-auto">
                         {user.role === "teacher"
-                          ? "Create your first course to get started."
-                          : "You are not enrolled in any courses yet. Contact your teacher to get enrolled."}
+                          ? "Create your first course to start teaching and managing students."
+                          : "You haven't been enrolled in any courses yet. Contact your teacher or administrator to get enrolled."}
                       </p>
+                      {user.role === "teacher" && (
+                        <button
+                          onClick={() => setSelectedCourse("create")}
+                          className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 transition-all duration-200 flex items-center mx-auto"
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Create Your First Course
+                        </button>
+                      )}
+                      {user.role === "student" && (
+                        <div className="bg-slate-800/30 rounded-xl p-6 max-w-md mx-auto border border-white/10">
+                          <h4 className="text-white font-medium mb-2">Need to get enrolled?</h4>
+                          <p className="text-gray-400 text-sm mb-4">
+                            Ask your teacher to add you to a course using your email address:
+                          </p>
+                          <div className="bg-slate-700/50 p-3 rounded-lg border border-white/10">
+                            <code className="text-purple-300 text-sm">{user.email}</code>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
