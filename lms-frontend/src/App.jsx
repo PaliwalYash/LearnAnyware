@@ -138,7 +138,8 @@ const videoSecurityStyles = `
 import { adsenseManager } from './utils/adsenseManager';
 import { ResponsiveAd, SquareAd, BannerAd } from './components/AdSenseComponents';
 
-const API_BASE = "http://localhost:5002/api";
+const API_BASE = "http://localhost:5000/api";
+const LMS_API_BASE = "http://localhost:5002/api";
 
 // Add this component before your main LearningManagementSystem component
 const TeacherSearchInput = ({ value, onChange, onSelect, placeholder }) => {
@@ -156,7 +157,7 @@ const TeacherSearchInput = ({ value, onChange, onSelect, placeholder }) => {
     setLoading(true);
     try {
       const token = localStorage.getItem("token");
-      const response = await fetch(`${API_BASE}/teachers/search?q=${encodeURIComponent(query)}`, {
+      const response = await fetch(`${LMS_API_BASE}/teachers/search?q=${encodeURIComponent(query)}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -235,7 +236,7 @@ const StudentSearchInput = ({ value, onChange, onSelect, placeholder, courseId }
     setLoading(true);
     try {
       const token = localStorage.getItem("token");
-      let url = `${API_BASE}/students/search?q=${encodeURIComponent(query)}`;
+      let url = `${LMS_API_BASE}/students/search?q=${encodeURIComponent(query)}`;
       if (courseId) {
         url += `&courseId=${courseId}`;
       }
@@ -1050,7 +1051,21 @@ const LearningManagementSystem = () => {
   };
 
   const apiCall = async (endpoint, options = {}) => {
-    const token = localStorage.getItem("token");
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    let token = localStorage.getItem("token");
+    let baseUrl = LMS_API_BASE;
+
+    // For admin users, determine which API to use
+    if (user.role === "admin") {
+      const clientEndpoints = ["/clients", "/admin/dashboard"];
+      const isClientEndpoint = clientEndpoints.some(ep => endpoint.startsWith(ep));
+
+      if (isClientEndpoint) {
+        baseUrl = API_BASE;
+        token = localStorage.getItem("clientToken") || token;
+      }
+    }
+
     const config = {
       headers: {
         "Content-Type": "application/json",
@@ -1060,15 +1075,66 @@ const LearningManagementSystem = () => {
       ...options,
     };
 
-    const response = await fetch(`${API_BASE}${endpoint}`, config);
-    const data = await response.json();
+    try {
+      const response = await fetch(`${baseUrl}${endpoint}`, config);
+      const data = await response.json();
 
-    if (!response.ok) {
-      throw new Error(data.message || "Something went wrong");
+      if (!response.ok) {
+        // Handle 401/403 errors for admin users
+        if (user.role === "admin" && (response.status === 403 || response.status === 401)) {
+          // Try to refresh LMS session
+          const clientToken = localStorage.getItem("clientToken");
+          if (clientToken && baseUrl === LMS_API_BASE) {
+            try {
+              const refreshResponse = await fetch(`${LMS_API_BASE}/admin/login-from-client`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": `Bearer ${clientToken}`
+                },
+                body: JSON.stringify({
+                  adminId: user.id,
+                  adminEmail: user.email,
+                  adminName: user.name
+                }),
+              });
+
+              if (refreshResponse.ok) {
+                const refreshResult = await refreshResponse.json();
+                localStorage.setItem("token", refreshResult.token);
+
+                // Retry original request with new token
+                const retryConfig = {
+                  ...config,
+                  headers: {
+                    ...config.headers,
+                    Authorization: `Bearer ${refreshResult.token}`
+                  }
+                };
+
+                const retryResponse = await fetch(`${baseUrl}${endpoint}`, retryConfig);
+                const retryData = await retryResponse.json();
+
+                if (retryResponse.ok) {
+                  return retryData;
+                }
+              }
+            } catch (refreshError) {
+              console.error("Token refresh failed:", refreshError);
+            }
+          }
+        }
+
+        throw new Error(data.message || "Something went wrong");
+      }
+
+      return data;
+    } catch (error) {
+      throw error;
     }
-
-    return data;
   };
+
+
 
   const validateMobileNumber = (mobile) => {
     if (!mobile) return true; // Optional field
@@ -1129,7 +1195,7 @@ const LearningManagementSystem = () => {
       setLoading(true);
       try {
         const token = localStorage.getItem("token");
-        let url = `${API_BASE}/students/search?q=${encodeURIComponent(query)}`;
+        let url = `${LMS_API_BASE}/students/search?q=${encodeURIComponent(query)}`;
         if (courseId) {
           url += `&courseId=${courseId}`;
         }
@@ -1242,7 +1308,7 @@ const LearningManagementSystem = () => {
       });
 
       const response = await fetch(
-        `${API_BASE}/courses/${selectedCourse.id}/videos`,
+        `${LMS_API_BASE}/courses/${selectedCourse.id}/videos`,
         {
           method: "POST",
           headers: {
@@ -1476,7 +1542,7 @@ const LearningManagementSystem = () => {
         }
       });
 
-      const response = await fetch(`${API_BASE}/blogs`, {
+      const response = await fetch(`${LMS_API_BASE}/blogs`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${localStorage.getItem("token")}`,
@@ -1516,7 +1582,7 @@ const LearningManagementSystem = () => {
         }
       });
 
-      const response = await fetch(`${API_BASE}/blogs/${editingBlog.id}`, {
+      const response = await fetch(`${LMS_API_BASE}/blogs/${editingBlog.id}`, {
         method: "PUT",
         headers: {
           Authorization: `Bearer ${localStorage.getItem("token")}`,
@@ -1759,7 +1825,7 @@ const LearningManagementSystem = () => {
         formData.append("attachments", file);
       });
 
-      const response = await fetch(`${API_BASE}/courses/${selectedCourse.id}/queries`, {
+      const response = await fetch(`${LMS_API_BASE}/courses/${selectedCourse.id}/queries`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${localStorage.getItem("token")}`,
@@ -1955,7 +2021,7 @@ const LearningManagementSystem = () => {
       });
 
       const response = await fetch(
-        `${API_BASE}/courses/${selectedCourse.id}/assignments`,
+        `${LMS_API_BASE}/courses/${selectedCourse.id}/assignments`,
         {
           method: "POST",
           headers: {
@@ -2008,7 +2074,7 @@ const LearningManagementSystem = () => {
       }
 
       const response = await fetch(
-        `${API_BASE}/assignments/${assignmentId}/submit`,
+        `${LMS_API_BASE}/assignments/${assignmentId}/submit`,
         {
           method: "POST",
           headers: {
@@ -2060,7 +2126,7 @@ const LearningManagementSystem = () => {
       });
 
       const response = await fetch(
-        `${API_BASE}/assignments/${editingAssignment.id}`,
+        `${LMS_API_BASE}/assignments/${editingAssignment.id}`,
         {
           method: "PUT",
           headers: {
@@ -2140,36 +2206,211 @@ const LearningManagementSystem = () => {
     setLoading(true);
 
     try {
-      const endpoint = authMode === "login" ? "/login" : "/register";
-      const data = await apiCall(endpoint, {
-        method: "POST",
-        body: JSON.stringify(authForm),
-      });
+      if (authMode === "login" && authForm.role === "admin") {
+        // Use client management login for admin
+        const data = await fetch(`${API_BASE}/login`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: authForm.email,
+            password: authForm.password,
+          }),
+        });
 
-      if (authMode === "login") {
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("user", JSON.stringify(data.user));
-        setUser(data.user);
-        showMessage("Login successful!", "success");
-        fetchInitialData(data.user);
+        const result = await data.json();
+
+        if (!data.ok) {
+          throw new Error(result.message || "Login failed");
+        }
+
+        // Store client management token
+        localStorage.setItem("clientToken", result.token);
+
+        // Create LMS admin session
+        try {
+          const lmsResponse = await fetch(`${LMS_API_BASE}/admin/login-from-client`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${result.token}`
+            },
+            body: JSON.stringify({
+              adminId: result.client.id,  // Use client.id from client management
+              adminEmail: result.client.email,
+              adminName: result.client.name
+            }),
+          });
+
+          const lmsResult = await lmsResponse.json();
+
+          if (lmsResponse.ok) {
+            // Use LMS token for the session
+            localStorage.setItem("token", lmsResult.token);
+            localStorage.setItem("user", JSON.stringify(lmsResult.user));
+            setUser(lmsResult.user);
+            showMessage("Admin login successful!", "success");
+            fetchInitialData(lmsResult.user);
+          } else {
+            // Fallback: create admin user object from client data
+            const adminUser = {
+              id: result.client.id,
+              name: result.client.name,
+              email: result.client.email,
+              role: "admin",
+              status: "active",
+              created_at: new Date().toISOString(),
+            };
+
+            localStorage.setItem("token", result.token);
+            localStorage.setItem("user", JSON.stringify(adminUser));
+            setUser(adminUser);
+            showMessage("Admin login successful!", "success");
+            fetchInitialData(adminUser);
+          }
+        } catch (lmsError) {
+          console.error("LMS admin session creation failed:", lmsError);
+
+          // Fallback: create admin user object from client data
+          const adminUser = {
+            id: result.client.id,
+            name: result.client.name,
+            email: result.client.email,
+            role: "admin",
+            status: "active",
+            created_at: new Date().toISOString(),
+          };
+
+          localStorage.setItem("token", result.token);
+          localStorage.setItem("user", JSON.stringify(adminUser));
+          setUser(adminUser);
+          showMessage("Admin login successful!", "success");
+          fetchInitialData(adminUser);
+        }
       } else {
-        const data = await apiCall("/register", {
+        // For teacher and student login, use existing LMS API
+        const endpoint = authMode === "login" ? "/login" : "/register";
+        const data = await apiCall(endpoint, {
           method: "POST",
           body: JSON.stringify(authForm),
         });
 
-        showMessage(
-          "Registration successful! Please check your email for welcome instructions, then login with your credentials.",
-          "success"
-        );
-        setAuthMode("login");
-        setAuthForm({ name: "", email: "", password: "", role: "student" });
+        if (authMode === "login") {
+          localStorage.setItem("token", data.token);
+          localStorage.setItem("user", JSON.stringify(data.user));
+          setUser(data.user);
+          showMessage("Login successful!", "success");
+          fetchInitialData(data.user);
+        } else {
+          showMessage(
+            "Registration successful! Please check your email for welcome instructions, then login with your credentials.",
+            "success"
+          );
+          setAuthMode("login");
+          setAuthForm({ name: "", email: "", password: "", role: "student" });
+        }
       }
     } catch (error) {
       showMessage(error.message, "error");
     }
 
     setLoading(false);
+  };
+
+  const createLMSAdminSession = async (adminData) => {
+    try {
+      // Option 1: Create a special admin login endpoint in LMS that accepts admin credentials
+      const response = await fetch(`${LMS_API_BASE}/admin/login-from-client`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem("clientToken")}`
+        },
+        body: JSON.stringify({
+          adminId: adminData.id,
+          adminEmail: adminData.email,
+          adminName: adminData.name
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        localStorage.setItem("lmsToken", result.token);
+      }
+    } catch (error) {
+      console.error("Could not create LMS admin session:", error);
+    }
+  };
+
+  const apiCallFixed = async (endpoint, options = {}) => {
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    let token = localStorage.getItem("token");
+    let baseUrl = LMS_API_BASE;
+
+    // Determine which API and token to use
+    if (user.role === "admin") {
+      // Admin-specific routing logic
+      const clientEndpoints = ["/clients", "/admin/dashboard"];
+      const isClientEndpoint = clientEndpoints.some(ep => endpoint.startsWith(ep));
+
+      if (isClientEndpoint) {
+        baseUrl = API_BASE;
+        token = localStorage.getItem("clientToken") || token;
+      } else {
+        baseUrl = LMS_API_BASE;
+        token = localStorage.getItem("lmsToken") || token;
+      }
+    }
+
+    const config = {
+      headers: {
+        "Content-Type": "application/json",
+        ...(token && { Authorization: `Bearer ${token}` }),
+        ...options.headers,
+      },
+      ...options,
+    };
+
+    try {
+      const response = await fetch(`${baseUrl}${endpoint}`, config);
+
+      // Handle 403/401 errors for admin users
+      if (!response.ok && user.role === "admin" && (response.status === 403 || response.status === 401)) {
+        // Try to refresh LMS token
+        if (baseUrl === LMS_API_BASE) {
+          const adminData = JSON.parse(localStorage.getItem("user"));
+          await createLMSAdminSession(adminData);
+
+          // Retry with new token
+          const newToken = localStorage.getItem("lmsToken");
+          if (newToken) {
+            const retryConfig = {
+              ...config,
+              headers: {
+                ...config.headers,
+                Authorization: `Bearer ${newToken}`
+              }
+            };
+            const retryResponse = await fetch(`${baseUrl}${endpoint}`, retryConfig);
+            const retryData = await retryResponse.json();
+
+            if (!retryResponse.ok) {
+              throw new Error(retryData.message || "Something went wrong");
+            }
+            return retryData;
+          }
+        }
+      }
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Something went wrong");
+      }
+      return data;
+    } catch (error) {
+      throw error;
+    }
   };
 
   const handleLogout = () => {
@@ -2527,7 +2768,7 @@ const LearningManagementSystem = () => {
       });
 
       const response = await fetch(
-        `${API_BASE}/courses/${selectedCourse.id}/sessions`,
+        `${LMS_API_BASE}/courses/${selectedCourse.id}/sessions`,
         {
           method: "POST",
           headers: {
@@ -2565,7 +2806,7 @@ const LearningManagementSystem = () => {
       });
 
       const response = await fetch(
-        `${API_BASE}/sessions/${editingSession.id}`,
+        `${LMS_API_BASE}/sessions/${editingSession.id}`,
         {
           method: "PUT",
           headers: {
@@ -2690,7 +2931,7 @@ const LearningManagementSystem = () => {
       });
 
       const response = await fetch(
-        `${API_BASE}/courses/${selectedCourse.id}/project`,
+        `${LMS_API_BASE}/courses/${selectedCourse.id}/project`,
         {
           method: "POST",
           headers: {
@@ -3082,6 +3323,46 @@ const LearningManagementSystem = () => {
               />
             </div>
 
+            {/* Role Selection for Login */}
+            {authMode === "login" && (
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Login As
+                </label>
+                <select
+                  value={authForm.role}
+                  onChange={(e) =>
+                    setAuthForm({ ...authForm, role: e.target.value })
+                  }
+                  className="w-full px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white "
+                >
+                  {/* <option value="student">Student</option>
+                  <option value="teacher">Teacher</option> */}
+                  <option value="teacher">User</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            )}
+
+            {/* Role Selection for Registration */}
+            {authMode === "register" && (
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Register As
+                </label>
+                <select
+                  value={authForm.role}
+                  onChange={(e) =>
+                    setAuthForm({ ...authForm, role: e.target.value })
+                  }
+                  className="w-full px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                >
+                  <option value="student">Student</option>
+                  <option value="teacher">Teacher</option>
+                </select>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={loading}
@@ -3096,9 +3377,12 @@ const LearningManagementSystem = () => {
           </form>
 
           <div className="mt-6 text-center">
-            <p className="text-gray-400 text-sm">
-              Demo Admin: admin@lms.com / admin123
-            </p>
+            <p className="text-gray-400 text-sm mb-2">Demo Credentials:</p>
+            <div className="space-y-1 text-xs text-gray-500">
+              <p>Admin: Use your client management credentials</p>
+              <p>Teacher: teacher@lms.com / teacher123</p>
+              <p>Student: student@lms.com / student123</p>
+            </div>
           </div>
         </div>
       </div>
@@ -3683,7 +3967,7 @@ const LearningManagementSystem = () => {
                       }}
                     >
                       <source
-                        src={`${API_BASE}/videos/${selectedVideo.id}/stream?token=${localStorage.getItem("token")}`}
+                        src={`${LMS_API_BASE}/videos/${selectedVideo.id}/stream?token=${localStorage.getItem("token")}`}
                         type="video/mp4"
                       />
                       Your browser does not support the video tag.

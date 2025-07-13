@@ -130,6 +130,56 @@ Please provide a helpful response that explains the concept and includes code ex
     throw new Error("AI service temporarily unavailable");
   }
 }
+async function migrateExistingData() {
+  try {
+    console.log("Starting tenant data migration...");
+
+    // Check if columns exist
+    const [userCols] = await db.execute("SHOW COLUMNS FROM users LIKE 'admin_id'");
+    if (userCols.length === 0) {
+      console.log("admin_id column not found, skipping migration");
+      return;
+    }
+
+    // Update teachers with admin_id based on who created them
+    await db.execute(`
+      UPDATE users 
+      SET admin_id = created_by 
+      WHERE role = 'teacher' 
+      AND created_by IS NOT NULL 
+      AND admin_id IS NULL
+    `);
+
+    // Update courses with admin_id based on teacher's admin_id
+    await db.execute(`
+      UPDATE courses c
+      JOIN users t ON c.teacher_id = t.id
+      SET c.admin_id = t.admin_id
+      WHERE t.admin_id IS NOT NULL AND c.admin_id IS NULL
+    `);
+
+    // Update blogs created by admins
+    await db.execute(`
+      UPDATE blogs b
+      JOIN users u ON b.author_id = u.id
+      SET b.admin_id = u.id
+      WHERE u.role = 'admin' AND b.admin_id IS NULL
+    `);
+
+    // Update blogs created by teachers
+    await db.execute(`
+      UPDATE blogs b
+      JOIN users u ON b.author_id = u.id
+      SET b.admin_id = u.admin_id
+      WHERE u.role = 'teacher' AND u.admin_id IS NOT NULL AND b.admin_id IS NULL
+    `);
+
+    console.log("Tenant data migration completed successfully");
+  } catch (error) {
+    console.error("Tenant data migration failed:", error);
+  }
+}
+
 
 // Initialize database
 async function initDatabase() {
@@ -148,6 +198,7 @@ async function initDatabase() {
 
     await createTables();
     await createDefaultAdmin();
+    await migrateExistingData();
   } catch (error) {
     console.error("Database connection failed:", error);
     process.exit(1);
@@ -172,6 +223,104 @@ async function createTables() {
     { name: "created_by", type: "INT NULL" },
     { name: "mobile", type: "VARCHAR(15) NULL" }, // Add this line
   ];
+  // Add these columns after the existing userColumns array processing
+  const adminColumns = [
+    { name: "admin_id", type: "INT NULL" }
+  ];
+
+  for (const column of adminColumns) {
+    try {
+      await db.query(
+        `ALTER TABLE users ADD COLUMN ${column.name} ${column.type}`
+      );
+      console.log(`Added ${column.name} column to users table`);
+    } catch (error) {
+      if (error.code !== "ER_DUP_FIELDNAME") {
+        console.log(`${column.name} column already exists in users table`);
+      }
+    }
+  }
+  // Add admin_id columns for tenant isolation
+  const tenantColumns = [
+    {
+      table: "users",
+      column: "admin_id",
+      type: "INT NULL",
+      constraint: "fk_users_admin_id",
+      reference: "users(id)"
+    },
+    {
+      table: "blogs",
+      column: "admin_id",
+      type: "INT NULL",
+      constraint: "fk_blogs_admin_id",
+      reference: "users(id)"
+    },
+    {
+      table: "courses",
+      column: "admin_id",
+      type: "INT NULL",
+      constraint: "fk_courses_admin_id",
+      reference: "users(id)"
+    }
+  ];
+
+  for (const col of tenantColumns) {
+    try {
+      await db.execute(`ALTER TABLE ${col.table} ADD COLUMN ${col.column} ${col.type}`);
+      console.log(`Added ${col.column} column to ${col.table} table`);
+    } catch (error) {
+      if (error.code !== "ER_DUP_FIELDNAME") {
+        console.log(`${col.column} column already exists in ${col.table} table`);
+      }
+    }
+
+    // Add foreign key constraint
+    try {
+      await db.execute(
+        `ALTER TABLE ${col.table} ADD CONSTRAINT ${col.constraint} FOREIGN KEY (${col.column}) REFERENCES ${col.reference} ON DELETE SET NULL`
+      );
+      console.log(`Added foreign key constraint ${col.constraint}`);
+    } catch (error) {
+      if (error.code !== "ER_DUP_KEYNAME") {
+        console.log(`Foreign key constraint ${col.constraint} already exists`);
+      }
+    }
+  }
+
+  // Add foreign key constraint for admin_id
+  try {
+    await db.query(
+      `ALTER TABLE users ADD CONSTRAINT fk_users_admin_id FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL`
+    );
+    console.log("Added foreign key constraint for users admin_id");
+  } catch (error) {
+    if (error.code !== "ER_DUP_KEYNAME") {
+      console.log("Users admin_id foreign key constraint already exists or not needed");
+    }
+  }
+
+  // Add admin_id to blogs table
+  try {
+    await db.query(`ALTER TABLE blogs ADD COLUMN admin_id INT NULL`);
+    console.log("Added admin_id column to blogs table");
+  } catch (error) {
+    if (error.code !== "ER_DUP_FIELDNAME") {
+      console.log("admin_id column already exists in blogs table");
+    }
+  }
+
+  // Add foreign key constraint for blogs admin_id
+  try {
+    await db.query(
+      `ALTER TABLE blogs ADD CONSTRAINT fk_blogs_admin_id FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL`
+    );
+    console.log("Added foreign key constraint for blogs admin_id");
+  } catch (error) {
+    if (error.code !== "ER_DUP_KEYNAME") {
+      console.log("Blogs admin_id foreign key constraint already exists or not needed");
+    }
+  }
 
   for (const column of userColumns) {
     try {
@@ -186,15 +335,44 @@ async function createTables() {
     }
   }
 
-  // Update role column to include admin
+
   try {
     await db.query(
       `ALTER TABLE users MODIFY COLUMN role ENUM('admin', 'teacher', 'student') NOT NULL`
+
     );
     console.log("Updated role column to include admin");
   } catch (error) {
     console.log("Role column update completed or not needed");
   }
+  try {
+    await db.query(`ALTER TABLE users ADD COLUMN admin_id INT NULL;
+    ALTER TABLE users ADD CONSTRAINT fk_users_admin_id FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL;`);
+    console.log("-- Add admin_id to track which admin owns each teacher");
+
+  } catch {
+    console.log("admin_id column update completed or not needed");
+  }
+
+  try {
+    await db.query(`ALTER TABLE blogs ADD COLUMN admin_id INT NULL;
+        ALTER TABLE blogs ADD CONSTRAINT fk_blogs_admin_id FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL;`);
+    console.log("-- Add admin_id to blogs table ");
+
+  }
+  catch {
+    console.log("--admin_id to blogs table column update completed or not needed");
+
+  }
+  try {
+    await db.query(`UPDATE users SET admin_id = created_by WHERE role = 'teacher' AND created_by IS NOT NULL;
+        UPDATE blogs SET admin_id = author_id WHERE author_id IN (SELECT id FROM users WHERE role = 'admin');`);
+    console.log("-- Update existing records to set admin_id based on created_by");
+  } catch {
+    console.log("-- Update existing records to set admin_id based on created_by column update completed or not needed");
+
+  }
+
 
   // Add foreign key constraint for created_by
   try {
@@ -598,10 +776,30 @@ const authenticateToken = (req, res, next) => {
     if (err) {
       return res.status(403).json({ message: "Invalid or expired token" });
     }
+
+    // Handle different token formats between client management system and LMS
+    if (user.role === 'admin') {
+      // For admin users from client management system
+      if (user.id && !user.userId) {
+        user.userId = user.id; // Map client management 'id' to LMS 'userId'
+      }
+
+      // Ensure we have both formats for compatibility
+      if (!user.id && user.userId) {
+        user.id = user.userId;
+      }
+    } else {
+      // For teachers and students from LMS
+      if (user.id && !user.userId) {
+        user.userId = user.id;
+      }
+    }
+
     req.user = user;
     next();
   });
 };
+
 
 // Role-based middleware
 const requireRole = (roles) => {
@@ -616,14 +814,65 @@ const requireRole = (roles) => {
 // Check if user is blocked
 const checkUserStatus = async (req, res, next) => {
   try {
-    const [user] = await db.execute("SELECT status FROM users WHERE id = ?", [
-      req.user.userId,
-    ]);
+    // For admin users from client system, handle differently
+    if (req.user.role === "admin") {
+      // Use the correct user ID field
+      const userId = req.user.userId || req.user.id;
 
-    if (user.length === 0 || user[0].status === "blocked") {
-      return res
-        .status(403)
-        .json({ message: "Account is blocked or not found" });
+      if (!userId) {
+        return res.status(403).json({ message: "Invalid user data" });
+      }
+
+      const [user] = await db.execute("SELECT * FROM users WHERE id = ?", [userId]);
+
+      if (user.length === 0) {
+        // Create admin user if doesn't exist in LMS database
+        try {
+          const hashedPassword = await bcrypt.hash("admin123", 10);
+          const [result] = await db.execute(
+            "INSERT INTO users (name, email, password, role, status, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
+            [
+              req.user.name || "Admin User",
+              req.user.email,
+              hashedPassword,
+              "admin",
+              "active"
+            ]
+          );
+
+          // Update the user object with the new ID
+          req.user.userId = result.insertId;
+          req.user.id = result.insertId;
+
+          console.log(`Created admin user in LMS: ${req.user.email} with ID: ${result.insertId}`);
+          return next();
+        } catch (createError) {
+          console.error("Error creating admin user:", createError);
+          return res.status(500).json({ message: "Failed to create admin session" });
+        }
+      }
+
+      // Check if existing admin user is blocked
+      if (user[0].status === "blocked") {
+        return res.status(403).json({ message: "Account is blocked" });
+      }
+
+      // Update user object with database info
+      req.user.userId = user[0].id;
+      req.user.id = user[0].id;
+    } else {
+      // Regular status check for teachers and students
+      const userId = req.user.userId || req.user.id;
+
+      if (!userId) {
+        return res.status(403).json({ message: "Invalid user data" });
+      }
+
+      const [user] = await db.execute("SELECT status FROM users WHERE id = ?", [userId]);
+
+      if (user.length === 0 || user[0].status === "blocked") {
+        return res.status(403).json({ message: "Account is blocked or not found" });
+      }
     }
 
     next();
@@ -711,13 +960,11 @@ app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ message: "Email and password are required" });
+      return res.status(400).json({ message: "Email and password are required" });
     }
 
     const [users] = await db.execute(
-      "SELECT id, name, email, mobile, password, role, status FROM users WHERE email = ?", // Add mobile here
+      "SELECT id, name, email, mobile, password, role, status FROM users WHERE email = ?",
       [email]
     );
 
@@ -738,8 +985,14 @@ app.post("/api/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
+    // Create token with both userId and id for compatibility
     const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role },
+      {
+        userId: user.id,  // LMS format
+        id: user.id,      // Client system format
+        email: user.email,
+        role: user.role
+      },
       JWT_SECRET,
       { expiresIn: "24h" }
     );
@@ -751,7 +1004,7 @@ app.post("/api/login", async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        mobile: user.mobile, // Include mobile in response
+        mobile: user.mobile,
         role: user.role,
         status: user.status,
       },
@@ -816,16 +1069,15 @@ app.delete(
       const { teacherId } = req.params;
 
       const [teacher] = await db.execute(
-        'SELECT id FROM users WHERE id = ? AND role = "teacher"',
-        [teacherId]
+        'SELECT id FROM users WHERE id = ? AND role = "teacher" AND admin_id = ?',
+        [teacherId, req.user.userId]
       );
 
       if (teacher.length === 0) {
-        return res.status(404).json({ message: "Teacher not found" });
+        return res.status(404).json({ message: "Teacher not found or not authorized" });
       }
 
       await db.execute("DELETE FROM users WHERE id = ?", [teacherId]);
-
       res.json({ message: "Teacher deleted successfully" });
     } catch (error) {
       console.error("Delete teacher error:", error);
@@ -1822,17 +2074,16 @@ app.post(
       );
 
       if (existingUser.length > 0) {
-        return res
-          .status(400)
-          .json({ message: "User already exists with this email" });
+        return res.status(400).json({ message: "User already exists with this email" });
       }
 
       const tempPassword = generatePassword();
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
+      // IMPORTANT: Set admin_id to current admin's ID
       const [result] = await db.execute(
-        "INSERT INTO users (name, email, password, role, created_by) VALUES (?, ?, ?, ?, ?)",
-        [name, email, hashedPassword, "teacher", req.user.userId]
+        "INSERT INTO users (name, email, password, role, created_by, admin_id) VALUES (?, ?, ?, ?, ?, ?)",
+        [name, email, hashedPassword, "teacher", req.user.userId, req.user.userId]
       );
 
       await db.execute(
@@ -1840,20 +2091,11 @@ app.post(
         [result.insertId, tempPassword]
       );
 
-      // Send welcome email with credentials
-      const userData = {
-        name,
-        email,
-        role: 'teacher'
-      };
-
+      // Send welcome email code...
+      const userData = { name, email, role: 'teacher' };
       try {
         const emailResult = await sendWelcomeEmail(userData, tempPassword);
-        if (emailResult.success) {
-          console.log(`Credentials email sent to new teacher: ${email}`);
-        } else {
-          console.error('Failed to send credentials email:', emailResult.error);
-        }
+        console.log(`Credentials email sent to new teacher: ${email}`);
       } catch (emailError) {
         console.error('Email sending error:', emailError);
       }
@@ -1861,10 +2103,7 @@ app.post(
       res.status(201).json({
         message: "Teacher created successfully! Login credentials have been sent to their email.",
         teacherId: result.insertId,
-        credentials: {
-          email: email,
-          password: tempPassword,
-        },
+        credentials: { email: email, password: tempPassword },
         emailSent: true
       });
     } catch (error) {
@@ -1874,6 +2113,146 @@ app.post(
   }
 );
 
+// Special admin login endpoint for client management system integration
+app.post("/api/admin/login-from-client", async (req, res) => {
+  try {
+    const { adminId, adminEmail, adminName } = req.body;
+
+    // Verify the request is coming from authenticated admin from client system
+    const authHeader = req.headers["authorization"];
+    const clientToken = authHeader && authHeader.split(" ")[1];
+
+    if (!clientToken) {
+      return res.status(401).json({ message: "Client token required" });
+    }
+
+    // Verify client token
+    let clientUser;
+    try {
+      clientUser = jwt.verify(clientToken, JWT_SECRET);
+
+      // Handle both 'client' and 'admin' roles from client system
+      if (clientUser.role !== 'admin' && clientUser.role !== 'client') {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+    } catch (error) {
+      return res.status(403).json({ message: "Invalid client token" });
+    }
+
+    // Create or find admin user in LMS system
+    let adminUser;
+    try {
+      const [existingAdmin] = await db.execute(
+        'SELECT id, name, email FROM users WHERE email = ? AND role = "admin"',
+        [adminEmail]
+      );
+
+      if (existingAdmin.length > 0) {
+        adminUser = existingAdmin[0];
+      } else {
+        // Create admin user in LMS if doesn't exist
+        const hashedPassword = await bcrypt.hash("admin123", 10);
+        const [result] = await db.execute(
+          "INSERT INTO users (name, email, password, role, status, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
+          [adminName || "Admin User", adminEmail, hashedPassword, "admin", "active"]
+        );
+        adminUser = {
+          id: result.insertId,
+          name: adminName || "Admin User",
+          email: adminEmail
+        };
+      }
+    } catch (error) {
+      console.error("Admin user creation error:", error);
+      return res.status(500).json({ message: "Failed to create admin session" });
+    }
+
+    // Generate LMS JWT token with consistent format
+    const lmsToken = jwt.sign(
+      {
+        userId: adminUser.id,  // LMS format
+        id: adminUser.id,      // Client system format
+        email: adminEmail,
+        name: adminUser.name,
+        role: "admin"
+      },
+      JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    res.json({
+      message: "LMS admin session created",
+      token: lmsToken,
+      user: {
+        id: adminUser.id,
+        name: adminUser.name,
+        email: adminEmail,
+        role: "admin",
+        status: "active"
+      }
+    });
+  } catch (error) {
+    console.error("LMS admin login error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Update the existing auth middleware to be more permissive for admin users
+const authenticateTokenWithFallback = (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ message: "Access token required" });
+  }
+
+  jwt.verify(token, JWT_SECRET, async (err, user) => {
+    if (err) {
+      // If token verification fails, check if this is an admin request
+      // and try to create a new session
+      if (req.body && req.body.adminEmail) {
+        try {
+          // Handle admin session creation
+          return next();
+        } catch (error) {
+          return res.status(403).json({ message: "Invalid or expired token" });
+        }
+      }
+      return res.status(403).json({ message: "Invalid or expired token" });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// Optional: Add a middleware to check if user exists in database for admin routes
+const checkUserExists = async (req, res, next) => {
+  if (req.user && req.user.role === "admin") {
+    try {
+      const [user] = await db.execute("SELECT * FROM users WHERE id = ?", [
+        req.user.userId,
+      ]);
+
+      if (user.length === 0) {
+        // Admin user doesn't exist in LMS, create them
+        const hashedPassword = await bcrypt.hash("admin123", 10);
+        const [result] = await db.execute(
+          "INSERT INTO users (name, email, password, role, status) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = 'active'",
+          ["Admin User", req.user.email, hashedPassword, "admin", "active"]
+        );
+
+        // Update userId if it was just created
+        if (result.insertId) {
+          req.user.userId = result.insertId;
+        }
+      }
+    } catch (error) {
+      console.error("User check error:", error);
+    }
+  }
+  next();
+};
+
 app.get(
   "/api/admin/teachers",
   authenticateToken,
@@ -1881,14 +2260,14 @@ app.get(
   async (req, res) => {
     try {
       const [teachers] = await db.execute(`
-      SELECT u.id, u.name, u.email, u.mobile, u.status, u.created_at, -- Add mobile here
-             COUNT(c.id) as course_count
-      FROM users u
-      LEFT JOIN courses c ON u.id = c.teacher_id
-      WHERE u.role = 'teacher'
-      GROUP BY u.id
-      ORDER BY u.created_at DESC
-    `);
+        SELECT u.id, u.name, u.email, u.mobile, u.status, u.created_at,
+               COUNT(c.id) as course_count
+        FROM users u
+        LEFT JOIN courses c ON u.id = c.teacher_id
+        WHERE u.role = 'teacher' AND u.admin_id = ?
+        GROUP BY u.id
+        ORDER BY u.created_at DESC
+      `, [req.user.userId]);
 
       res.json(teachers);
     } catch (error) {
@@ -1897,6 +2276,7 @@ app.get(
     }
   }
 );
+
 app.post(
   "/api/teacher/import-students",
   authenticateToken,
@@ -1985,7 +2365,6 @@ app.post(
   }
 );
 
-
 app.put(
   "/api/admin/teacher/:teacherId/toggle-status",
   authenticateToken,
@@ -1995,24 +2374,20 @@ app.put(
       const { teacherId } = req.params;
 
       const [teacher] = await db.execute(
-        'SELECT id, status FROM users WHERE id = ? AND role = "teacher"',
-        [teacherId]
+        'SELECT id, status FROM users WHERE id = ? AND role = "teacher" AND admin_id = ?',
+        [teacherId, req.user.userId]
       );
 
       if (teacher.length === 0) {
-        return res.status(404).json({ message: "Teacher not found" });
+        return res.status(404).json({ message: "Teacher not found or not authorized" });
       }
 
       const newStatus = teacher[0].status === "active" ? "blocked" : "active";
 
-      await db.execute("UPDATE users SET status = ? WHERE id = ?", [
-        newStatus,
-        teacherId,
-      ]);
+      await db.execute("UPDATE users SET status = ? WHERE id = ?", [newStatus, teacherId]);
 
       res.json({
-        message: `Teacher ${newStatus === "active" ? "unblocked" : "blocked"
-          } successfully`,
+        message: `Teacher ${newStatus === "active" ? "unblocked" : "blocked"} successfully`,
         newStatus,
       });
     } catch (error) {
@@ -2285,6 +2660,16 @@ app.post(
     try {
       const { title, description, duration_days, group_link, start_date, end_date } = req.body;
 
+      // Get teacher's admin_id
+      const [teacherInfo] = await db.execute(
+        "SELECT admin_id FROM users WHERE id = ? AND role = 'teacher'",
+        [req.user.userId]
+      );
+
+      if (teacherInfo.length === 0) {
+        return res.status(403).json({ message: "Teacher not found" });
+      }
+
       // Validate dates if provided
       if (start_date && end_date && new Date(start_date) >= new Date(end_date)) {
         return res.status(400).json({ message: "End date must be after start date" });
@@ -2296,8 +2681,8 @@ app.post(
       }
 
       const [result] = await db.execute(
-        "INSERT INTO courses (title, description, teacher_id, duration_days, group_link, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [title, description, req.user.userId, duration_days || 30, group_link || null, start_date || null, end_date || null]
+        "INSERT INTO courses (title, description, teacher_id, duration_days, group_link, start_date, end_date, admin_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [title, description, req.user.userId, duration_days || 30, group_link || null, start_date || null, end_date || null, teacherInfo[0].admin_id]
       );
 
       res.status(201).json({
@@ -3196,14 +3581,26 @@ app.post(
         return res.status(400).json({ message: "Title and content are required" });
       }
 
-      // Validate video URL if provided
       if (videoUrl && !isValidUrl(videoUrl)) {
         return res.status(400).json({ message: "Invalid video URL" });
       }
 
+      let adminId = null;
+      
+      if (req.user.role === "admin") {
+        adminId = req.user.userId;
+      } else if (req.user.role === "teacher") {
+        // Get teacher's admin_id
+        const [teacherInfo] = await db.execute(
+          "SELECT admin_id FROM users WHERE id = ? AND role = 'teacher'",
+          [req.user.userId]
+        );
+        adminId = teacherInfo[0]?.admin_id || null;
+      }
+
       const [result] = await db.execute(
-        "INSERT INTO blogs (title, content, image_url, video_url, author_id) VALUES (?, ?, ?, ?, ?)",
-        [title, content, imageUrl, videoUrl || null, req.user.userId]
+        "INSERT INTO blogs (title, content, image_url, video_url, author_id, admin_id) VALUES (?, ?, ?, ?, ?, ?)",
+        [title, content, imageUrl, videoUrl || null, req.user.userId, adminId]
       );
 
       res.status(201).json({
@@ -3217,6 +3614,7 @@ app.post(
   }
 );
 
+
 // Get all blogs (All users can view)
 app.get(
   "/api/blogs",
@@ -3226,23 +3624,62 @@ app.get(
     try {
       const { page = 1, limit = 10 } = req.query;
 
-      // Convert to integers and validate
       const pageNum = Math.max(1, parseInt(page, 10)) || 1;
       const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10))) || 10;
       const offset = (pageNum - 1) * limitNum;
 
-      // Use query instead of execute for this specific case
-      const [blogs] = await db.query(
-        `SELECT b.*, u.name as author_name, u.role as author_role
-         FROM blogs b
-         JOIN users u ON b.author_id = u.id
-         ORDER BY b.created_at DESC
-         LIMIT ${limitNum} OFFSET ${offset}`
-      );
+      let query = `
+        SELECT b.*, u.name as author_name, u.role as author_role
+        FROM blogs b
+        JOIN users u ON b.author_id = u.id
+      `;
 
-      const [totalCount] = await db.execute(
-        "SELECT COUNT(*) as count FROM blogs"
-      );
+      let countQuery = "SELECT COUNT(*) as count FROM blogs b";
+      let params = [];
+
+      if (req.user.role === "admin") {
+        // Admin sees only their tenant's blogs
+        query += " WHERE b.admin_id = ?";
+        countQuery += " WHERE b.admin_id = ?";
+        params.push(req.user.userId);
+      } else if (req.user.role === "teacher") {
+        // Teacher sees their admin's blogs and their own
+        const [teacherInfo] = await db.execute(
+          "SELECT admin_id FROM users WHERE id = ?",
+          [req.user.userId]
+        );
+        
+        if (teacherInfo.length > 0 && teacherInfo[0].admin_id) {
+          query += " WHERE b.admin_id = ?";
+          countQuery += " WHERE b.admin_id = ?";
+          params.push(teacherInfo[0].admin_id);
+        } else {
+          query += " WHERE b.author_id = ?";
+          countQuery += " WHERE b.author_id = ?";
+          params.push(req.user.userId);
+        }
+      } else if (req.user.role === "student") {
+        // Students see blogs from their enrolled courses' admin
+        query += ` WHERE b.admin_id IN (
+          SELECT DISTINCT c.admin_id 
+          FROM course_enrollments ce
+          JOIN courses c ON ce.course_id = c.id
+          WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
+        )`;
+        countQuery += ` WHERE b.admin_id IN (
+          SELECT DISTINCT c.admin_id 
+          FROM course_enrollments ce
+          JOIN courses c ON ce.course_id = c.id
+          WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
+        )`;
+        params.push(req.user.userId);
+      }
+
+      query += " ORDER BY b.created_at DESC LIMIT ? OFFSET ?";
+      params.push(limitNum, offset);
+
+      const [blogs] = await db.execute(query, params);
+      const [totalCount] = await db.execute(countQuery, params.slice(0, -2));
 
       res.json({
         blogs,
@@ -3256,7 +3693,6 @@ app.get(
     }
   }
 );
-
 // Get single blog
 app.get(
   "/api/blogs/:blogId",
@@ -4228,43 +4664,155 @@ app.get(
       let stats = {};
 
       if (req.user.role === "admin") {
+        // Admin statistics - only for their tenant
         const [teacherCount] = await db.execute(
-          'SELECT COUNT(*) as count FROM users WHERE role = "teacher"'
-        );
-        const [studentCount] = await db.execute(
-          'SELECT COUNT(*) as count FROM users WHERE role = "student"'
-        );
-        const [courseCount] = await db.execute(
-          "SELECT COUNT(*) as count FROM courses"
-        );
-        const [certificateCount] = await db.execute(
-          "SELECT COUNT(*) as count FROM certificates"
+          'SELECT COUNT(*) as count FROM users WHERE role = "teacher" AND admin_id = ?',
+          [req.user.userId]
         );
 
-        // Admin query statistics
+        const [studentCount] = await db.execute(
+          `SELECT COUNT(DISTINCT u.id) as count 
+     FROM users u 
+     WHERE u.role = "student" 
+     AND u.id IN (
+       SELECT DISTINCT ce.student_id 
+       FROM course_enrollments ce
+       JOIN courses c ON ce.course_id = c.id
+       JOIN users t ON c.teacher_id = t.id
+       WHERE t.admin_id = ?
+     )`,
+          [req.user.userId]
+        );
+
+        const [courseCount] = await db.execute(
+          `SELECT COUNT(*) as count 
+     FROM courses c
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
+        );
+
+        const [certificateCount] = await db.execute(
+          `SELECT COUNT(*) as count 
+     FROM certificates cert
+     JOIN courses c ON cert.course_id = c.id
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
+        );
+
+        // Assignment statistics for this admin's tenant
+        const [assignmentStats] = await db.execute(
+          `SELECT 
+      COUNT(*) as total_assignments,
+      COUNT(CASE WHEN a.end_date < NOW() THEN 1 END) as past_due,
+      COUNT(DISTINCT ass.assignment_id) as assignments_with_submissions,
+      COUNT(CASE WHEN ass.status = 'submitted' THEN 1 END) as pending_submissions
+     FROM assignments a
+     LEFT JOIN assignment_submissions ass ON a.id = ass.assignment_id
+     JOIN courses c ON a.course_id = c.id
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
+        );
+
+        // Video statistics for this admin's tenant
+        const [videoStats] = await db.execute(
+          `SELECT 
+      COUNT(*) as total_videos,
+      COUNT(CASE WHEN cv.video_type = 'file' THEN 1 END) as uploaded_videos,
+      COUNT(CASE WHEN cv.video_type = 'youtube' THEN 1 END) as youtube_videos
+     FROM course_videos cv
+     JOIN courses c ON cv.course_id = c.id
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
+        );
+
+        // Query statistics for this admin's tenant
         const [queryStats] = await db.execute(
           `SELECT 
-            COUNT(*) as total_queries,
-            COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_queries,
-            COUNT(CASE WHEN status = 'answered' THEN 1 END) as answered_queries,
-            COUNT(CASE WHEN priority = 'high' AND status = 'pending' THEN 1 END) as urgent_queries
-           FROM course_queries`
+      COUNT(*) as total_queries,
+      COUNT(CASE WHEN cq.status = 'pending' THEN 1 END) as pending_queries,
+      COUNT(CASE WHEN cq.status = 'answered' THEN 1 END) as answered_queries,
+      COUNT(CASE WHEN cq.priority = 'high' AND cq.status = 'pending' THEN 1 END) as urgent_queries
+     FROM course_queries cq
+     JOIN courses c ON cq.course_id = c.id
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
         );
 
-        // Blog statistics for admin
+        // Blog statistics for this admin's tenant
         const [blogStats] = await db.execute(
-          "SELECT COUNT(*) as total_blogs FROM blogs"
+          "SELECT COUNT(*) as total_blogs FROM blogs WHERE admin_id = ?",
+          [req.user.userId]
         );
 
-        // System statistics
-        const [systemStats] = await db.execute(
+        // Receipt statistics for this admin's tenant
+        const [receiptStats] = await db.execute(
           `SELECT 
-            COUNT(DISTINCT ce.student_id) as active_students,
-            COUNT(DISTINCT ds.id) as total_sessions,
-            COUNT(DISTINCT p.id) as total_projects
-           FROM course_enrollments ce
-           LEFT JOIN daily_sessions ds ON ce.course_id = ds.course_id
-           LEFT JOIN projects p ON ce.course_id = p.course_id AND ce.student_id = p.student_id`
+      COUNT(*) as total_receipts,
+      SUM(pr.total_amount) as total_revenue
+     FROM payment_receipts pr
+     JOIN courses c ON pr.course_id = c.id
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
+        );
+
+        // Project statistics for this admin's tenant
+        const [projectStats] = await db.execute(
+          `SELECT 
+      COUNT(*) as total_projects,
+      COUNT(CASE WHEN p.status = 'submitted' THEN 1 END) as pending_projects,
+      COUNT(CASE WHEN p.status = 'approved' THEN 1 END) as approved_projects,
+      COUNT(CASE WHEN p.status = 'rejected' THEN 1 END) as rejected_projects
+     FROM projects p
+     JOIN courses c ON p.course_id = c.id
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
+        );
+
+        // Session statistics for this admin's tenant
+        const [sessionStats] = await db.execute(
+          `SELECT 
+      COUNT(*) as total_sessions,
+      COUNT(CASE WHEN ds.session_date >= CURDATE() THEN 1 END) as upcoming_sessions,
+      COUNT(CASE WHEN ds.session_date < CURDATE() THEN 1 END) as past_sessions
+     FROM daily_sessions ds
+     JOIN courses c ON ds.course_id = c.id
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
+        );
+
+        // Attendance statistics for this admin's tenant
+        const [attendanceStats] = await db.execute(
+          `SELECT 
+      COUNT(*) as total_attendance_records,
+      COUNT(CASE WHEN sa.status = 'present' THEN 1 END) as present_count,
+      COUNT(CASE WHEN sa.status = 'absent' THEN 1 END) as absent_count,
+      COUNT(CASE WHEN sa.status = 'late' THEN 1 END) as late_count
+     FROM student_attendance sa
+     JOIN courses c ON sa.course_id = c.id
+     JOIN users t ON c.teacher_id = t.id
+     WHERE t.admin_id = ?`,
+          [req.user.userId]
+        );
+
+        // Recent activity statistics for this admin's tenant
+        const [recentStats] = await db.execute(
+          `SELECT 
+      COUNT(CASE WHEN u.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as new_teachers_month,
+      COUNT(CASE WHEN ce.enrolled_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as new_enrollments_month,
+      COUNT(CASE WHEN cert.issued_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as new_certificates_month
+     FROM users u
+     LEFT JOIN course_enrollments ce ON u.id = ce.student_id
+     LEFT JOIN certificates cert ON u.id = cert.student_id
+     WHERE u.role = 'teacher' AND u.admin_id = ?`,
+          [req.user.userId]
         );
 
         stats = {
@@ -4272,288 +4820,123 @@ app.get(
           students: studentCount[0].count,
           courses: courseCount[0].count,
           certificates: certificateCount[0].count,
+          assignments: assignmentStats[0].total_assignments || 0,
+          pendingAssignments: assignmentStats[0].pending_submissions || 0,
+          pastDueAssignments: assignmentStats[0].past_due || 0,
+          assignmentsWithSubmissions: assignmentStats[0].assignments_with_submissions || 0,
+          videos: videoStats[0].total_videos || 0,
+          uploadedVideos: videoStats[0].uploaded_videos || 0,
+          youtubeVideos: videoStats[0].youtube_videos || 0,
           totalQueries: queryStats[0].total_queries || 0,
           pendingQueries: queryStats[0].pending_queries || 0,
           answeredQueries: queryStats[0].answered_queries || 0,
           urgentQueries: queryStats[0].urgent_queries || 0,
           totalBlogs: blogStats[0].total_blogs || 0,
-          activeStudents: systemStats[0].active_students || 0,
-          totalSessions: systemStats[0].total_sessions || 0,
-          totalProjects: systemStats[0].total_projects || 0
-        };
-
-      } else if (req.user.role === "teacher") {
-        // Teacher's own courses (main teacher)
-        const [ownCourseCount] = await db.execute(
-          "SELECT COUNT(*) as count FROM courses WHERE teacher_id = ?",
-          [req.user.userId]
-        );
-
-        // Courses where teacher is sub-teacher
-        const [subCourseCount] = await db.execute(
-          "SELECT COUNT(*) as count FROM course_teachers WHERE teacher_id = ?",
-          [req.user.userId]
-        );
-
-        // Total courses (main + sub)
-        const totalCourses = ownCourseCount[0].count + subCourseCount[0].count;
-
-        // Students from all courses (main + sub)
-        const [studentCount] = await db.execute(
-          `SELECT COUNT(DISTINCT ce.student_id) as count 
-           FROM course_enrollments ce 
-           JOIN courses c ON ce.course_id = c.id 
-           LEFT JOIN course_teachers ct ON c.id = ct.course_id
-           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Sessions from all courses
-        const [sessionCount] = await db.execute(
-          `SELECT COUNT(*) as count 
-           FROM daily_sessions ds 
-           JOIN courses c ON ds.course_id = c.id 
-           LEFT JOIN course_teachers ct ON c.id = ct.course_id
-           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Pending projects from all courses
-        const [projectCount] = await db.execute(
-          `SELECT COUNT(*) as count 
-           FROM projects p 
-           JOIN courses c ON p.course_id = c.id 
-           LEFT JOIN course_teachers ct ON c.id = ct.course_id
-           WHERE (c.teacher_id = ? OR ct.teacher_id = ?) AND p.status = 'submitted'`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Assignment statistics
-        const [assignmentCount] = await db.execute(
-          `
-    SELECT COUNT(*) as count 
-    FROM assignments a 
-    JOIN courses c ON a.course_id = c.id 
-    LEFT JOIN course_teachers ct ON c.id = ct.course_id
-    WHERE c.teacher_id = ? OR ct.teacher_id = ?
-  `,
-          [req.user.userId, req.user.userId]
-        );
-        const [videoCount] = await db.execute(
-          `
-  SELECT COUNT(*) as count 
-  FROM course_videos cv
-  JOIN courses c ON cv.course_id = c.id 
-  WHERE c.teacher_id = ?
-`,
-          [req.user.userId]
-        );
-
-        const [pendingAssignmentCount] = await db.execute(
-          `SELECT COUNT(*) as count 
-           FROM assignment_submissions asub
-           JOIN assignments a ON asub.assignment_id = a.id
-           JOIN courses c ON a.course_id = c.id 
-           LEFT JOIN course_teachers ct ON c.id = ct.course_id
-           WHERE (c.teacher_id = ? OR ct.teacher_id = ?) AND asub.status = 'submitted'`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Query statistics for teacher
-        const [queryStats] = await db.execute(
-          `SELECT 
-            COUNT(*) as total_queries,
-            COUNT(CASE WHEN cq.status = 'pending' THEN 1 END) as pending_queries,
-            COUNT(CASE WHEN cq.status = 'answered' THEN 1 END) as answered_queries,
-            COUNT(CASE WHEN cq.priority = 'high' AND cq.status = 'pending' THEN 1 END) as urgent_queries,
-            COUNT(CASE WHEN DATE(cq.asked_at) = CURDATE() THEN 1 END) as todays_queries,
-            COUNT(CASE WHEN DATE(cq.asked_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 END) as this_week_queries
-           FROM course_queries cq 
-           JOIN courses c ON cq.course_id = c.id 
-           LEFT JOIN course_teachers ct ON c.id = ct.course_id
-           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Receipt statistics for teacher
-        const [receiptStats] = await db.execute(
-          `SELECT 
-            COUNT(*) as total_receipts,
-            COALESCE(SUM(total_amount), 0) as total_revenue,
-            COUNT(CASE WHEN DATE(created_at) = CURDATE() THEN 1 END) as todays_receipts
-           FROM payment_receipts 
-           WHERE created_by = ?`,
-          [req.user.userId]
-        );
-
-        // Blog statistics for teacher
-        const [blogStats] = await db.execute(
-          "SELECT COUNT(*) as my_blogs FROM blogs WHERE author_id = ?",
-          [req.user.userId]
-        );
-
-        // Certificate statistics for teacher's students
-        const [certificateStats] = await db.execute(
-          `SELECT COUNT(DISTINCT cert.id) as certificates_issued
-           FROM certificates cert
-           JOIN courses c ON cert.course_id = c.id
-           LEFT JOIN course_teachers ct ON c.id = ct.course_id
-           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
-          [req.user.userId, req.user.userId]
-        );
-
-        stats = {
-          courses: totalCourses,
-          ownCourses: ownCourseCount[0].count,
-          subCourses: subCourseCount[0].count,
-          students: studentCount[0].count,
-          sessions: sessionCount[0].count,
-          pendingProjects: projectCount[0].count,
-          assignments: assignmentCount[0].count,
-          pendingAssignments: pendingAssignmentCount[0].count,
-          totalQueries: queryStats[0].total_queries || 0,
-          pendingQueries: queryStats[0].pending_queries || 0,
-          answeredQueries: queryStats[0].answered_queries || 0,
-          urgentQueries: queryStats[0].urgent_queries || 0,
-          todaysQueries: queryStats[0].todays_queries || 0,
-          thisWeekQueries: queryStats[0].this_week_queries || 0,
           totalReceipts: receiptStats[0].total_receipts || 0,
-          totalRevenue: receiptStats[0].total_revenue || 0,
-          todaysReceipts: receiptStats[0].todays_receipts || 0,
-          myBlogs: blogStats[0].my_blogs || 0,
-          certificatesIssued: certificateStats[0].certificates_issued || 0,
-          videos: videoCount[0].count,
-        };
-
-      } else if (req.user.role === "student") {
-        // Only count courses where student is actually enrolled
-        const [enrolledCount] = await db.execute(
-          "SELECT COUNT(*) as count FROM course_enrollments WHERE student_id = ?",
-          [req.user.userId]
-        );
-
-        const [completedCount] = await db.execute(
-          "SELECT COUNT(*) as count FROM course_enrollments WHERE student_id = ? AND completed_at IS NOT NULL",
-          [req.user.userId]
-        );
-
-        const [certificateCount] = await db.execute(
-          "SELECT COUNT(*) as count FROM certificates WHERE student_id = ?",
-          [req.user.userId]
-        );
-
-        const [projectCount] = await db.execute(
-          "SELECT COUNT(*) as count FROM projects WHERE student_id = ?",
-          [req.user.userId]
-        );
-
-        // Count videos only from enrolled courses
-        const [watchedVideoCount] = await db.execute(
-          `SELECT COUNT(DISTINCT vwp.video_id) as count 
-     FROM video_watch_progress vwp
-     JOIN course_videos cv ON vwp.video_id = cv.id
-     JOIN course_enrollments ce ON cv.course_id = ce.course_id
-     WHERE ce.student_id = ? AND vwp.completed = TRUE`,
-          [req.user.userId]
-        );
-
-        // Student assignment statistics - only from enrolled courses
-        const [assignmentStats] = await db.execute(
-          `SELECT 
-      COUNT(DISTINCT a.id) as available_assignments,
-      COUNT(DISTINCT asub.assignment_id) as submitted_assignments,
-      COUNT(CASE WHEN asub.status = 'approved' THEN 1 END) as approved_assignments,
-      COUNT(CASE WHEN asub.status = 'submitted' THEN 1 END) as pending_assignments
-     FROM assignments a
-     JOIN course_enrollments ce ON a.course_id = ce.course_id AND ce.student_id = ?
-     LEFT JOIN assignment_submissions asub ON a.id = asub.assignment_id AND asub.student_id = ?`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Student query statistics - only from enrolled courses
-        const [queryStats] = await db.execute(
-          `SELECT 
-      COUNT(*) as my_queries,
-      COUNT(CASE WHEN cq.status = 'answered' THEN 1 END) as answered_queries,
-      COUNT(CASE WHEN cq.status = 'pending' THEN 1 END) as pending_queries,
-      COUNT(CASE WHEN cq.priority = 'high' THEN 1 END) as high_priority_queries,
-      COALESCE(SUM(cq.helpful_votes), 0) as total_helpful_votes
-     FROM course_queries cq
-     JOIN course_enrollments ce ON cq.course_id = ce.course_id AND ce.student_id = ?
-     WHERE cq.student_id = ?`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Student attendance statistics - only from enrolled courses
-        const [attendanceStats] = await db.execute(
-          `SELECT 
-      COUNT(*) as total_sessions_attended,
-      COUNT(CASE WHEN sa.status = 'present' THEN 1 END) as present_count,
-      COUNT(CASE WHEN sa.status = 'absent' THEN 1 END) as absent_count,
-      COUNT(CASE WHEN sa.status = 'late' THEN 1 END) as late_count
-     FROM student_attendance sa
-     JOIN course_enrollments ce ON sa.course_id = ce.course_id AND ce.student_id = ?
-     WHERE sa.student_id = ?`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Student receipt statistics
-        const [receiptStats] = await db.execute(
-          `SELECT 
-      COUNT(*) as my_receipts,
-      COALESCE(SUM(total_amount), 0) as total_paid
-     FROM payment_receipts 
-     WHERE student_id = ?`,
-          [req.user.userId]
-        );
-
-        // Session interaction statistics - only from enrolled courses
-        const [sessionStats] = await db.execute(
-          `SELECT 
-      COUNT(DISTINCT sa.session_id) as total_sessions,
-      COUNT(CASE WHEN sa.marked_read = 1 THEN 1 END) as sessions_read,
-      COUNT(CASE WHEN sa.joined_meet = 1 THEN 1 END) as meetings_joined
-     FROM session_attendance sa
-     JOIN daily_sessions ds ON sa.session_id = ds.id
-     JOIN course_enrollments ce ON ds.course_id = ce.course_id AND ce.student_id = ?
-     WHERE sa.student_id = ?`,
-          [req.user.userId, req.user.userId]
-        );
-
-        // Calculate percentages
-        const attendancePercentage = attendanceStats[0].total_sessions_attended > 0
-          ? Math.round((attendanceStats[0].present_count / attendanceStats[0].total_sessions_attended) * 100)
-          : 0;
-
-        const assignmentCompletionPercentage = assignmentStats[0].available_assignments > 0
-          ? Math.round((assignmentStats[0].submitted_assignments / assignmentStats[0].available_assignments) * 100)
-          : 0;
-
-        stats = {
-          enrolledCourses: enrolledCount[0].count,
-          completedCourses: completedCount[0].count,
-          certificates: certificateCount[0].count,
-          projects: projectCount[0].count,
-          availableAssignments: assignmentStats[0].available_assignments || 0,
-          submittedAssignments: assignmentStats[0].submitted_assignments || 0,
-          approvedAssignments: assignmentStats[0].approved_assignments || 0,
-          pendingAssignments: assignmentStats[0].pending_assignments || 0,
-          assignmentCompletionPercentage: assignmentCompletionPercentage,
-          myQueries: queryStats[0].my_queries || 0,
-          answeredQueries: queryStats[0].answered_queries || 0,
-          pendingQueries: queryStats[0].pending_queries || 0,
-          highPriorityQueries: queryStats[0].high_priority_queries || 0,
-          totalHelpfulVotes: queryStats[0].total_helpful_votes || 0,
-          attendancePercentage: attendancePercentage,
+          totalRevenue: parseFloat(receiptStats[0].total_revenue || 0).toFixed(2),
+          totalProjects: projectStats[0].total_projects || 0,
+          pendingProjects: projectStats[0].pending_projects || 0,
+          approvedProjects: projectStats[0].approved_projects || 0,
+          rejectedProjects: projectStats[0].rejected_projects || 0,
+          totalSessions: sessionStats[0].total_sessions || 0,
+          upcomingSessions: sessionStats[0].upcoming_sessions || 0,
+          pastSessions: sessionStats[0].past_sessions || 0,
+          totalAttendanceRecords: attendanceStats[0].total_attendance_records || 0,
           presentCount: attendanceStats[0].present_count || 0,
           absentCount: attendanceStats[0].absent_count || 0,
           lateCount: attendanceStats[0].late_count || 0,
-          totalSessions: sessionStats[0].total_sessions || 0,
-          sessionsRead: sessionStats[0].sessions_read || 0,
-          meetingsJoined: sessionStats[0].meetings_joined || 0,
-          myReceipts: receiptStats[0].my_receipts || 0,
-          totalPaid: receiptStats[0].total_paid || 0,
-          watchedVideos: watchedVideoCount[0].count || 0,
+          attendanceRate: attendanceStats[0].total_attendance_records > 0
+            ? ((attendanceStats[0].present_count / attendanceStats[0].total_attendance_records) * 100).toFixed(1)
+            : 0,
+          newTeachersThisMonth: recentStats[0].new_teachers_month || 0,
+          newEnrollmentsThisMonth: recentStats[0].new_enrollments_month || 0,
+          newCertificatesThisMonth: recentStats[0].new_certificates_month || 0,
+        };
+      } else if (req.user.role === "teacher") {
+        // Teacher statistics
+        const userId = req.user.userId || req.user.id;
+
+        const [courseStats] = await db.execute(
+          `SELECT COUNT(*) as count FROM courses 
+           WHERE teacher_id = ? OR id IN (
+             SELECT course_id FROM course_teachers WHERE teacher_id = ?
+           )`,
+          [userId, userId]
+        );
+
+        const [studentStats] = await db.execute(
+          `SELECT COUNT(DISTINCT ce.student_id) as count 
+           FROM course_enrollments ce
+           JOIN courses c ON ce.course_id = c.id
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
+          [userId, userId]
+        );
+
+        const [assignmentStats] = await db.execute(
+          `SELECT 
+            COUNT(DISTINCT a.id) as total_assignments,
+            COUNT(CASE WHEN ass.status = 'submitted' THEN 1 END) as pending_submissions
+           FROM assignments a
+           LEFT JOIN assignment_submissions ass ON a.id = ass.assignment_id
+           JOIN courses c ON a.course_id = c.id
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
+          [userId, userId]
+        );
+
+        const [videoStats] = await db.execute(
+          `SELECT COUNT(*) as count 
+           FROM course_videos cv
+           JOIN courses c ON cv.course_id = c.id
+           LEFT JOIN course_teachers ct ON c.id = ct.course_id
+           WHERE c.teacher_id = ? OR ct.teacher_id = ?`,
+          [userId, userId]
+        );
+
+        stats = {
+          courses: courseStats[0].count,
+          students: studentStats[0].count,
+          assignments: assignmentStats[0].total_assignments || 0,
+          pendingAssignments: assignmentStats[0].pending_submissions || 0,
+          videos: videoStats[0].count || 0,
+        };
+
+      } else if (req.user.role === "student") {
+        // Student statistics
+        const userId = req.user.userId || req.user.id;
+
+        const [enrollmentStats] = await db.execute(
+          `SELECT 
+            COUNT(*) as enrolled_courses,
+            COUNT(CASE WHEN completed_at IS NOT NULL THEN 1 END) as completed_courses
+           FROM course_enrollments WHERE student_id = ?`,
+          [userId]
+        );
+
+        const [certificateStats] = await db.execute(
+          "SELECT COUNT(*) as count FROM certificates WHERE student_id = ?",
+          [userId]
+        );
+
+        const [projectStats] = await db.execute(
+          "SELECT COUNT(*) as count FROM projects WHERE student_id = ?",
+          [userId]
+        );
+
+        const [videoStats] = await db.execute(
+          `SELECT COUNT(DISTINCT vwp.video_id) as count 
+           FROM video_watch_progress vwp
+           WHERE vwp.student_id = ? AND vwp.watched_seconds > 0`,
+          [userId]
+        );
+
+        stats = {
+          enrolledCourses: enrollmentStats[0].enrolled_courses || 0,
+          completedCourses: enrollmentStats[0].completed_courses || 0,
+          certificates: certificateStats[0].count || 0,
+          projects: projectStats[0].count || 0,
+          watchedVideos: videoStats[0].count || 0,
         };
       }
 
@@ -4568,7 +4951,7 @@ app.get(
 // Add these routes to your server.js file
 
 // Google AdSense Configuration Route
-app.get("/api/adsense-config", authenticateToken, async (req, res) => {
+app.get("/api/adsense-config", authenticateToken, checkUserExists, async (req, res) => {
   try {
     const config = {
       clientId: process.env.GOOGLE_ADSENSE_CLIENT_ID || "ca-pub-xxxxxxxxxxxxxxxxx",
