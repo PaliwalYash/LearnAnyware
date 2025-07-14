@@ -810,8 +810,34 @@ const requireRole = (roles) => {
     next();
   };
 };
+// Helper function to check admin status from client management system
+const checkAdminStatus = async (adminId) => {
+  try {
+    const response = await fetch(`${API_BASE}/clients/${adminId}/status`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`Admin status check failed: ${response.status}`);
+      return { active: false, error: 'Unable to verify admin status' };
+    }
+
+    const data = await response.json();
+    return {
+      active: data.active && data.status === 'Active',
+      adminData: data
+    };
+  } catch (error) {
+    console.error('Admin status check error:', error);
+    return { active: false, error: 'Admin status check failed' };
+  }
+};
 
 // Check if user is blocked
+// Check if user is blocked and admin is active
 const checkUserStatus = async (req, res, next) => {
   try {
     // For admin users from client system, handle differently
@@ -868,10 +894,44 @@ const checkUserStatus = async (req, res, next) => {
         return res.status(403).json({ message: "Invalid user data" });
       }
 
-      const [user] = await db.execute("SELECT status FROM users WHERE id = ?", [userId]);
+      const [user] = await db.execute("SELECT status, admin_id FROM users WHERE id = ?", [userId]);
 
       if (user.length === 0 || user[0].status === "blocked") {
         return res.status(403).json({ message: "Account is blocked or not found" });
+      }
+
+      // Check admin status for teachers and students
+      if (req.user.role === 'teacher' || req.user.role === 'student') {
+        let adminIdToCheck = null;
+        
+        if (req.user.role === 'teacher' && user[0].admin_id) {
+          adminIdToCheck = user[0].admin_id;
+        } else if (req.user.role === 'student') {
+          // For students, find their admin through enrolled courses
+          const [adminInfo] = await db.execute(`
+            SELECT DISTINCT c.admin_id 
+            FROM course_enrollments ce
+            JOIN courses c ON ce.course_id = c.id
+            JOIN users t ON c.teacher_id = t.id
+            WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
+            LIMIT 1
+          `, [userId]);
+          
+          if (adminInfo.length > 0) {
+            adminIdToCheck = adminInfo[0].admin_id;
+          }
+        }
+
+        if (adminIdToCheck) {
+          const adminStatus = await checkAdminStatus(adminIdToCheck);
+          
+          if (!adminStatus.active) {
+            return res.status(403).json({
+              message: "Service temporarily unavailable. Please contact your administrator.",
+              error: "ADMIN_INACTIVE"
+            });
+          }
+        }
       }
     }
 
@@ -964,7 +1024,7 @@ app.post("/api/login", async (req, res) => {
     }
 
     const [users] = await db.execute(
-      "SELECT id, name, email, mobile, password, role, status FROM users WHERE email = ?",
+      "SELECT id, name, email, mobile, password, role, status, admin_id FROM users WHERE email = ?",
       [email]
     );
 
@@ -983,6 +1043,40 @@ app.post("/api/login", async (req, res) => {
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
       return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // Check admin status for teachers and students
+    if (user.role === 'teacher' || user.role === 'student') {
+      let adminIdToCheck = null;
+      
+      if (user.role === 'teacher' && user.admin_id) {
+        adminIdToCheck = user.admin_id;
+      } else if (user.role === 'student') {
+        // For students, find their admin through enrolled courses
+        const [adminInfo] = await db.execute(`
+          SELECT DISTINCT c.admin_id 
+          FROM course_enrollments ce
+          JOIN courses c ON ce.course_id = c.id
+          JOIN users t ON c.teacher_id = t.id
+          WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
+          LIMIT 1
+        `, [user.id]);
+        
+        if (adminInfo.length > 0) {
+          adminIdToCheck = adminInfo[0].admin_id;
+        }
+      }
+
+      if (adminIdToCheck) {
+        const adminStatus = await checkAdminStatus(adminIdToCheck);
+        
+        if (!adminStatus.active) {
+          return res.status(403).json({
+            message: "Service temporarily unavailable. Please contact your administrator.",
+            error: "ADMIN_INACTIVE"
+          });
+        }
+      }
     }
 
     // Create token with both userId and id for compatibility
@@ -3586,7 +3680,7 @@ app.post(
       }
 
       let adminId = null;
-      
+
       if (req.user.role === "admin") {
         adminId = req.user.userId;
       } else if (req.user.role === "teacher") {
@@ -3648,7 +3742,7 @@ app.get(
           "SELECT admin_id FROM users WHERE id = ?",
           [req.user.userId]
         );
-        
+
         if (teacherInfo.length > 0 && teacherInfo[0].admin_id) {
           query += " WHERE b.admin_id = ?";
           countQuery += " WHERE b.admin_id = ?";

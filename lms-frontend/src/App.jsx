@@ -1055,7 +1055,7 @@ const LearningManagementSystem = () => {
     let token = localStorage.getItem("token");
     let baseUrl = LMS_API_BASE;
 
-    // For admin users, determine which API to use
+    // Determine which API and token to use
     if (user.role === "admin") {
       const clientEndpoints = ["/clients", "/admin/dashboard"];
       const isClientEndpoint = clientEndpoints.some(ep => endpoint.startsWith(ep));
@@ -1080,6 +1080,17 @@ const LearningManagementSystem = () => {
       const data = await response.json();
 
       if (!response.ok) {
+        // Handle admin inactive error
+        if (data.error === "ADMIN_INACTIVE" || data.message.includes("Service temporarily unavailable")) {
+          // Force logout for teacher/student when admin is inactive
+          if (user.role === "teacher" || user.role === "student") {
+            localStorage.removeItem("token");
+            localStorage.removeItem("user");
+            window.location.reload();
+            return;
+          }
+        }
+
         // Handle 401/403 errors for admin users
         if (user.role === "admin" && (response.status === 403 || response.status === 401)) {
           // Try to refresh LMS session
@@ -2237,7 +2248,7 @@ const LearningManagementSystem = () => {
               "Authorization": `Bearer ${result.token}`
             },
             body: JSON.stringify({
-              adminId: result.client.id,  // Use client.id from client management
+              adminId: result.client.id,
               adminEmail: result.client.email,
               adminName: result.client.name
             }),
@@ -2246,7 +2257,6 @@ const LearningManagementSystem = () => {
           const lmsResult = await lmsResponse.json();
 
           if (lmsResponse.ok) {
-            // Use LMS token for the session
             localStorage.setItem("token", lmsResult.token);
             localStorage.setItem("user", JSON.stringify(lmsResult.user));
             setUser(lmsResult.user);
@@ -2312,7 +2322,13 @@ const LearningManagementSystem = () => {
         }
       }
     } catch (error) {
-      showMessage(error.message, "error");
+      // Handle specific admin inactive error
+      if (error.message.includes("Service temporarily unavailable") ||
+        (error.response && error.response.error === "ADMIN_INACTIVE")) {
+        showMessage("Service is currently unavailable. Your administrator's account is inactive. Please contact support.", "error");
+      } else {
+        showMessage(error.message, "error");
+      }
     }
 
     setLoading(false);
