@@ -808,6 +808,63 @@ const LearningManagementSystem = () => {
     }
   }, [queryFilters]);
 
+  useEffect(() => {
+    const validateToken = async () => {
+      const token = localStorage.getItem("token");
+      const userData = localStorage.getItem("user");
+
+      if (token && userData) {
+        const user = JSON.parse(userData);
+
+        // For admin users, validate both client and LMS tokens
+        if (user.role === "admin") {
+          const clientToken = localStorage.getItem("clientToken");
+
+          if (!clientToken) {
+            console.log("No client token found for admin, clearing session");
+            localStorage.removeItem("token");
+            localStorage.removeItem("user");
+            return;
+          }
+
+          // Verify client token is still valid
+          try {
+            const verifyResponse = await fetch(`${API_BASE}/verify-token`, {
+              method: "GET",
+              headers: {
+                "Authorization": `Bearer ${clientToken}`,
+                "Content-Type": "application/json"
+              }
+            });
+
+            if (!verifyResponse.ok) {
+              console.log("Client token invalid, clearing session");
+              localStorage.removeItem("token");
+              localStorage.removeItem("clientToken");
+              localStorage.removeItem("user");
+              return;
+            }
+
+            // Client token is valid, proceed with LMS session
+            setUser(user);
+            fetchInitialData(user);
+          } catch (error) {
+            console.error("Token validation failed:", error);
+            localStorage.removeItem("token");
+            localStorage.removeItem("clientToken");
+            localStorage.removeItem("user");
+          }
+        } else {
+          // For non-admin users, proceed normally
+          setUser(user);
+          fetchInitialData(user);
+        }
+      }
+    };
+
+    validateToken();
+  }, []);
+
   // Add this useEffect to disable developer tools and screenshots
   // Add these additional security hooks at the top of your component
   const [isDevToolsOpen, setIsDevToolsOpen] = useState(false);
@@ -1082,7 +1139,6 @@ const LearningManagementSystem = () => {
       if (!response.ok) {
         // Handle admin inactive error
         if (data.error === "ADMIN_INACTIVE" || data.message.includes("Service temporarily unavailable")) {
-          // Force logout for teacher/student when admin is inactive
           if (user.role === "teacher" || user.role === "student") {
             localStorage.removeItem("token");
             localStorage.removeItem("user");
@@ -1093,10 +1149,36 @@ const LearningManagementSystem = () => {
 
         // Handle 401/403 errors for admin users
         if (user.role === "admin" && (response.status === 403 || response.status === 401)) {
-          // Try to refresh LMS session
+          console.log("Admin token expired or invalid, attempting refresh...");
+
+          // Try to refresh LMS session using client token
           const clientToken = localStorage.getItem("clientToken");
           if (clientToken && baseUrl === LMS_API_BASE) {
             try {
+              console.log("Attempting to refresh admin session...");
+
+              // First verify that the client token is still valid
+              const verifyResponse = await fetch(`${API_BASE}/verify-token`, {
+                method: "GET",
+                headers: {
+                  "Authorization": `Bearer ${clientToken}`,
+                  "Content-Type": "application/json"
+                }
+              });
+
+              if (!verifyResponse.ok) {
+                console.error("Client token is invalid, forcing logout");
+                localStorage.removeItem("token");
+                localStorage.removeItem("clientToken");
+                localStorage.removeItem("user");
+                window.location.reload();
+                return;
+              }
+
+              const verifiedUser = await verifyResponse.json();
+              console.log("checking verifyuser",verified);
+              
+              // Now create LMS session with verified user data
               const refreshResponse = await fetch(`${LMS_API_BASE}/admin/login-from-client`, {
                 method: "POST",
                 headers: {
@@ -1104,15 +1186,16 @@ const LearningManagementSystem = () => {
                   "Authorization": `Bearer ${clientToken}`
                 },
                 body: JSON.stringify({
-                  adminId: user.id,
-                  adminEmail: user.email,
-                  adminName: user.name
+                  adminId: verifiedUser.id,
+                  adminEmail: verifiedUser.email,
+                  adminName: verifiedUser.name
                 }),
               });
 
               if (refreshResponse.ok) {
                 const refreshResult = await refreshResponse.json();
                 localStorage.setItem("token", refreshResult.token);
+                console.log("Admin session refreshed successfully");
 
                 // Retry original request with new token
                 const retryConfig = {
@@ -1128,11 +1211,28 @@ const LearningManagementSystem = () => {
 
                 if (retryResponse.ok) {
                   return retryData;
+                } else {
+                  console.error("Retry failed after token refresh:", retryData);
+                  throw new Error(retryData.message || "Request failed after token refresh");
                 }
+              } else {
+                const refreshError = await refreshResponse.json();
+                console.error("Token refresh failed:", refreshError);
+                throw new Error(refreshError.message || "Token refresh failed");
               }
             } catch (refreshError) {
               console.error("Token refresh failed:", refreshError);
+
+              // If refresh fails, force logout
+              localStorage.removeItem("token");
+              localStorage.removeItem("clientToken");
+              localStorage.removeItem("user");
+              window.location.reload();
+              return;
             }
+          } else {
+            console.error("No client token available for refresh");
+            throw new Error(data.message || "Authentication failed");
           }
         }
 
@@ -1141,9 +1241,11 @@ const LearningManagementSystem = () => {
 
       return data;
     } catch (error) {
+      console.error("API call error:", error);
       throw error;
     }
   };
+
 
 
 
@@ -1438,7 +1540,9 @@ const LearningManagementSystem = () => {
       const data = await apiCall("/dashboard/stats");
       setDashboardStats(data);
     } catch (error) {
-      showMessage(error.message, "error");
+      console.error("Dashboard stats error:", error);
+      // Set empty stats object as fallback
+      setDashboardStats({});
     }
   };
 
@@ -1447,7 +1551,8 @@ const LearningManagementSystem = () => {
       const data = await apiCall("/admin/teachers");
       setTeachers(data);
     } catch (error) {
-      showMessage(error.message, "error");
+      console.error("Fetch teachers error:", error);
+      setTeachers([]);
     }
   };
 
@@ -1528,16 +1633,34 @@ const LearningManagementSystem = () => {
   //     showMessage(error.message, "error");
   //   }
   // };
+
   const fetchBlogs = async (page = 1) => {
     try {
-      // Ensure page is a number
+      // Ensure page is a number and valid
       const pageNum = parseInt(page, 10) || 1;
+      console.log(`Fetching blogs for page: ${pageNum}`);
+
       const data = await apiCall(`/blogs?page=${pageNum}&limit=10`);
-      setBlogs(data.blogs);
-      setBlogTotalPages(data.totalPages);
-      setBlogPage(data.currentPage);
+
+      if (data && data.blogs) {
+        setBlogs(data.blogs);
+        setBlogTotalPages(data.totalPages || 1);
+        setBlogPage(data.currentPage || pageNum);
+      } else {
+        // Handle case where data structure is unexpected
+        console.warn("Unexpected blog data structure:", data);
+        setBlogs([]);
+        setBlogTotalPages(1);
+        setBlogPage(1);
+      }
     } catch (error) {
-      showMessage(error.message, "error");
+      console.error("Fetch blogs error:", error);
+      showMessage("Failed to load blog posts. Please try again.", "error");
+
+      // Set empty state on error
+      setBlogs([]);
+      setBlogTotalPages(1);
+      setBlogPage(1);
     }
   };
 
@@ -1655,11 +1778,15 @@ const LearningManagementSystem = () => {
       const data = await apiCall("/adsense-config");
       setAdsConfig(data);
       setAdsEnabled(data.enabled);
-      adsenseManager.setEnabled(data.enabled);
+      if (typeof adsenseManager !== 'undefined') {
+        adsenseManager.setEnabled(data.enabled);
+      }
     } catch (error) {
       console.error("Fetch AdSense config error:", error);
       setAdsEnabled(false);
-      adsenseManager.setEnabled(false);
+      if (typeof adsenseManager !== 'undefined') {
+        adsenseManager.setEnabled(false);
+      }
     }
   };
 
@@ -2218,8 +2345,10 @@ const LearningManagementSystem = () => {
 
     try {
       if (authMode === "login" && authForm.role === "admin") {
+        console.log("Admin login attempt with:", authForm.email);
+
         // Use client management login for admin
-        const data = await fetch(`${API_BASE}/login`, {
+        const response = await fetch(`${API_BASE}/login`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -2230,17 +2359,37 @@ const LearningManagementSystem = () => {
           }),
         });
 
-        const result = await data.json();
+        const result = await response.json();
 
-        if (!data.ok) {
+        if (!response.ok) {
           throw new Error(result.message || "Login failed");
         }
+
+        console.log("Client management login successful");
 
         // Store client management token
         localStorage.setItem("clientToken", result.token);
 
-        // Create LMS admin session
+        // Verify the client token first
+        const verifyResponse = await fetch(`${API_BASE}/verify-token`, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${result.token}`,
+            "Content-Type": "application/json"
+          }
+        });
+        console.log(verifyResponse.body ,"sdjwndj");
+        
+        if (!verifyResponse.ok) {
+          throw new Error("Client token verification failed");
+        }
+
+        const verifiedUser = await verifyResponse.json();
+        console.log("verifired user ",verifiedUser);
+        
+        // Create LMS admin session with verified user data
         try {
+          console.log("Creating LMS admin session...");
           const lmsResponse = await fetch(`${LMS_API_BASE}/admin/login-from-client`, {
             method: "POST",
             headers: {
@@ -2248,55 +2397,28 @@ const LearningManagementSystem = () => {
               "Authorization": `Bearer ${result.token}`
             },
             body: JSON.stringify({
-              adminId: result.client.id,
-              adminEmail: result.client.email,
-              adminName: result.client.name
+              adminId: verifiedUser.id,
+              adminEmail: verifiedUser.email,
+              adminName: verifiedUser.name
             }),
           });
 
           const lmsResult = await lmsResponse.json();
 
           if (lmsResponse.ok) {
+            console.log("LMS admin session created successfully");
             localStorage.setItem("token", lmsResult.token);
             localStorage.setItem("user", JSON.stringify(lmsResult.user));
             setUser(lmsResult.user);
             showMessage("Admin login successful!", "success");
             fetchInitialData(lmsResult.user);
           } else {
-            // Fallback: create admin user object from client data
-            const adminUser = {
-              id: result.client.id,
-              name: result.client.name,
-              email: result.client.email,
-              role: "admin",
-              status: "active",
-              created_at: new Date().toISOString(),
-            };
-
-            localStorage.setItem("token", result.token);
-            localStorage.setItem("user", JSON.stringify(adminUser));
-            setUser(adminUser);
-            showMessage("Admin login successful!", "success");
-            fetchInitialData(adminUser);
+            console.error("LMS session creation failed:", lmsResult);
+            throw new Error(lmsResult.message || "Failed to create LMS session");
           }
         } catch (lmsError) {
           console.error("LMS admin session creation failed:", lmsError);
-
-          // Fallback: create admin user object from client data
-          const adminUser = {
-            id: result.client.id,
-            name: result.client.name,
-            email: result.client.email,
-            role: "admin",
-            status: "active",
-            created_at: new Date().toISOString(),
-          };
-
-          localStorage.setItem("token", result.token);
-          localStorage.setItem("user", JSON.stringify(adminUser));
-          setUser(adminUser);
-          showMessage("Admin login successful!", "success");
-          fetchInitialData(adminUser);
+          throw new Error("Failed to create LMS admin session");
         }
       } else {
         // For teacher and student login, use existing LMS API
@@ -2322,9 +2444,9 @@ const LearningManagementSystem = () => {
         }
       }
     } catch (error) {
-      // Handle specific admin inactive error
+      console.error("Authentication error:", error);
       if (error.message.includes("Service temporarily unavailable") ||
-        (error.response && error.response.error === "ADMIN_INACTIVE")) {
+        error.message.includes("ADMIN_INACTIVE")) {
         showMessage("Service is currently unavailable. Your administrator's account is inactive. Please contact support.", "error");
       } else {
         showMessage(error.message, "error");
@@ -2333,6 +2455,7 @@ const LearningManagementSystem = () => {
 
     setLoading(false);
   };
+
 
   const createLMSAdminSession = async (adminData) => {
     try {
@@ -3214,9 +3337,21 @@ const LearningManagementSystem = () => {
   // Update the fetchInitialData function for teachers
   const fetchInitialData = async (userData) => {
     try {
+      console.log("Fetching initial data for user:", userData);
+
+      // Always try to fetch dashboard stats first
       await fetchDashboardStats();
+
+      // Then fetch AdSense config
       await fetchAdsenseConfig();
-      await fetchBlogs();
+
+      // Try to fetch blogs but don't fail the entire initialization if it fails
+      try {
+        await fetchBlogs();
+      } catch (blogError) {
+        console.warn("Blog fetching failed during initialization:", blogError);
+        // Continue with other initialization
+      }
 
       if (userData.role === "admin") {
         await fetchTeachers();
@@ -3236,7 +3371,8 @@ const LearningManagementSystem = () => {
         setProfileForm({ name: userData.name, mobile: userData.mobile || "" });
       }
     } catch (error) {
-      showMessage("Error loading initial data", "error");
+      console.error("Error loading initial data:", error);
+      showMessage("Some features may not be available. Please refresh the page.", "warning");
     }
   };
   // Login Form
@@ -3248,7 +3384,7 @@ const LearningManagementSystem = () => {
             <div className="mx-auto h-16 w-16 bg-gradient-to-r from-purple-400 to-pink-400 rounded-2xl flex items-center justify-center mb-4">
               <BookOpen className="h-8 w-8 text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-white mb-2">Learning Hub</h1>
+            <h1 className="text-3xl font-bold text-white mb-2">LearnAnyware</h1>
             <p className="text-gray-300">Modern Learning Management System</p>
           </div>
 
@@ -3359,6 +3495,17 @@ const LearningManagementSystem = () => {
                 </select>
               </div>
             )}
+            {authMode === "login" && authForm.role === "admin" && (
+              <div className="mt-4 text-center">
+                <p className="text-gray-400 text-xs mb-2">Debug Info:</p>
+                <div className="space-y-1 text-xs text-gray-500">
+                  <p>Client API: {API_BASE || 'Not configured'}</p>
+                  <p>LMS API: {LMS_API_BASE || 'Not configured'}</p>
+                  <p>Client Token: {localStorage.getItem("clientToken") ? 'Present' : 'Missing'}</p>
+                  <p>LMS Token: {localStorage.getItem("token") ? 'Present' : 'Missing'}</p>
+                </div>
+              </div>
+            )}
 
             {/* Role Selection for Registration */}
             {authMode === "register" && (
@@ -3424,7 +3571,7 @@ const LearningManagementSystem = () => {
                 <div className="h-8 w-8 bg-gradient-to-r from-purple-400 to-pink-400 rounded-lg flex items-center justify-center mr-3">
                   <BookOpen className="h-5 w-5 text-white" />
                 </div>
-                <h1 className="text-xl font-bold text-white">Learning Hub</h1>
+                <h1 className="text-xl font-bold text-white">LearnAnyware</h1>
               </div>
             </div>
 
@@ -3441,7 +3588,7 @@ const LearningManagementSystem = () => {
                 </div>
               </div>
 
-              {user.role === "student" && (
+              {/* {user.role === "student" && (
                 <button
                   onClick={() => setAiChatOpen(true)}
                   className="bg-gradient-to-r from-emerald-500 to-blue-500 text-white px-4 py-2 rounded-xl hover:from-emerald-600 hover:to-blue-600 transition-all duration-200 flex items-center space-x-2 shadow-lg"
@@ -3449,7 +3596,7 @@ const LearningManagementSystem = () => {
                   <Bot className="h-4 w-4" />
                   <span className="hidden sm:inline">AI Assistant</span>
                 </button>
-              )}
+              )} */}
 
               <button
                 onClick={() => setActiveSection("settings")}
@@ -4054,7 +4201,7 @@ const LearningManagementSystem = () => {
         {/* Sidebar */}
         <div
           className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"
-            } fixed lg:relative lg:translate-x-0 inset-y-0 left-0 z-30 w-64 bg-slate-800/50 backdrop-blur-md border-r border-white/10 transition-transform duration-300 ease-in-out lg:block`}
+            } fixed lg:relative lg:translate-x-0 inset-y-0 left-0 z-30 w-64 min-h-screen bg-slate-800/50 backdrop-blur-md border-r border-white/10 transition-transform duration-300 ease-in-out lg:block`}
         >
           <div className="p-6">
             <nav className="space-y-2">

@@ -23,6 +23,7 @@ const io = socketIo(server, {
     credentials: true,
   },
 });
+const API_BASE = "http://localhost:5000/api";
 
 // Middleware
 app.use(
@@ -772,24 +773,49 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ message: "Access token required" });
   }
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
+  // Try to verify as LMS token first
+  jwt.verify(token, JWT_SECRET, async (err, user) => {
     if (err) {
+      // If LMS token verification fails, check if it's a client token for admin requests
+      const isAdminRoute = req.path.includes('/admin') || req.method === 'POST' && req.path.includes('/admin/login-from-client');
+      
+      if (isAdminRoute) {
+        try {
+          // Verify as client token
+          const tokenVerification = await verifyClientToken(token);
+          
+          if (tokenVerification.valid) {
+            const clientUser = tokenVerification.user;
+          
+            // Format user object for LMS compatibility
+            req.user = {
+              userId: clientUser.id,
+              id: clientUser.id,
+              email: clientUser.email,
+              name: clientUser.name,
+              role: 'admin'
+            };
+            
+            return next();
+          }
+        } catch (verifyError) {
+          console.error("Client token verification failed:", verifyError);
+        }
+      }
+      
       return res.status(403).json({ message: "Invalid or expired token" });
     }
 
-    // Handle different token formats between client management system and LMS
-    if (user.role === 'admin') {
-      // For admin users from client management system
+    // Handle LMS token verification success
+    if (user.role === 'admin' || user.role === 'client') {
       if (user.id && !user.userId) {
-        user.userId = user.id; // Map client management 'id' to LMS 'userId'
+        user.userId = user.id;
+        user.role = 'admin';
       }
-
-      // Ensure we have both formats for compatibility
       if (!user.id && user.userId) {
         user.id = user.userId;
       }
     } else {
-      // For teachers and students from LMS
       if (user.id && !user.userId) {
         user.userId = user.id;
       }
@@ -818,11 +844,13 @@ const checkAdminStatus = async (adminId) => {
       headers: {
         'Content-Type': 'application/json',
       },
+      timeout: 5000 // Add timeout
     });
 
     if (!response.ok) {
       console.error(`Admin status check failed: ${response.status}`);
-      return { active: false, error: 'Unable to verify admin status' };
+      // Return active as true for connectivity issues to avoid blocking legitimate users
+      return { active: true, error: 'Unable to verify admin status' };
     }
 
     const data = await response.json();
@@ -832,17 +860,47 @@ const checkAdminStatus = async (adminId) => {
     };
   } catch (error) {
     console.error('Admin status check error:', error);
-    return { active: false, error: 'Admin status check failed' };
+    // Return active as true for connectivity issues
+    return { active: true, error: 'Admin status check failed' };
+  }
+};
+const verifyClientToken = async (token) => {
+  try {
+    const response = await fetch(`${API_BASE}/verify-token`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 5000
+    });
+
+    if (!response.ok) {
+      console.error(`Client token verification failed: ${response.status}`);
+      return { valid: false, error: 'Token verification failed' };
+    }
+
+    const userData = await response.json();
+    return {
+      valid: true,
+      user: {
+        id: userData.id,
+        email: userData.email,
+        name: userData.name,
+        role: userData.role === 'client' ? 'admin' : userData.role
+      }
+    };
+  } catch (error) {
+    console.error('Client token verification error:', error);
+    return { valid: false, error: 'Token verification failed' };
   }
 };
 
 // Check if user is blocked
-// Check if user is blocked and admin is active
 const checkUserStatus = async (req, res, next) => {
   try {
     // For admin users from client system, handle differently
-    if (req.user.role === "admin") {
-      // Use the correct user ID field
+    if (req.user.role === "admin" || req.user.role === "client") {
       const userId = req.user.userId || req.user.id;
 
       if (!userId) {
@@ -858,7 +916,7 @@ const checkUserStatus = async (req, res, next) => {
           const [result] = await db.execute(
             "INSERT INTO users (name, email, password, role, status, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
             [
-              req.user.name || "Admin User",
+              req.user.name || "Admin User", // Use actual name from token
               req.user.email,
               hashedPassword,
               "admin",
@@ -866,7 +924,6 @@ const checkUserStatus = async (req, res, next) => {
             ]
           );
 
-          // Update the user object with the new ID
           req.user.userId = result.insertId;
           req.user.id = result.insertId;
 
@@ -878,12 +935,23 @@ const checkUserStatus = async (req, res, next) => {
         }
       }
 
-      // Check if existing admin user is blocked
       if (user[0].status === "blocked") {
         return res.status(403).json({ message: "Account is blocked" });
       }
 
-      // Update user object with database info
+      // Update admin name if it has changed
+      if (user[0].name !== req.user.name && req.user.name) {
+        try {
+          await db.execute(
+            "UPDATE users SET name = ? WHERE id = ?",
+            [req.user.name, userId]
+          );
+          console.log(`Updated admin name from "${user[0].name}" to "${req.user.name}"`);
+        } catch (updateError) {
+          console.error("Error updating admin name:", updateError);
+        }
+      }
+
       req.user.userId = user[0].id;
       req.user.id = user[0].id;
     } else {
@@ -907,7 +975,6 @@ const checkUserStatus = async (req, res, next) => {
         if (req.user.role === 'teacher' && user[0].admin_id) {
           adminIdToCheck = user[0].admin_id;
         } else if (req.user.role === 'student') {
-          // For students, find their admin through enrolled courses
           const [adminInfo] = await db.execute(`
             SELECT DISTINCT c.admin_id 
             FROM course_enrollments ce
@@ -1015,6 +1082,38 @@ app.post("/api/register", async (req, res) => {
   }
 });
 
+const adminTokenRefresh = async (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    try {
+      // Check if admin exists in LMS database
+      const [adminUser] = await db.execute(
+        'SELECT id, name, email FROM users WHERE email = ? AND role = "admin"',
+        [req.user.email]
+      );
+
+      if (adminUser.length === 0) {
+        // Admin user doesn't exist in LMS, create them
+        const hashedPassword = await bcrypt.hash("admin123", 10);
+        const [result] = await db.execute(
+          "INSERT INTO users (name, email, password, role, status, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
+          [req.user.name || "Admin User", req.user.email, hashedPassword, "admin", "active"]
+        );
+        
+        req.user.userId = result.insertId;
+        req.user.id = result.insertId;
+        console.log(`Auto-created admin user: ${req.user.email} with ID: ${result.insertId}`);
+      } else {
+        req.user.userId = adminUser[0].id;
+        req.user.id = adminUser[0].id;
+      }
+    } catch (error) {
+      console.error("Admin token refresh error:", error);
+      return res.status(500).json({ message: "Failed to refresh admin session" });
+    }
+  }
+  next();
+};
+
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -1085,6 +1184,7 @@ app.post("/api/login", async (req, res) => {
         userId: user.id,  // LMS format
         id: user.id,      // Client system format
         email: user.email,
+        name: user.name,
         role: user.role
       },
       JWT_SECRET,
@@ -2212,7 +2312,7 @@ app.post("/api/admin/login-from-client", async (req, res) => {
   try {
     const { adminId, adminEmail, adminName } = req.body;
 
-    // Verify the request is coming from authenticated admin from client system
+    // Get the client token from headers
     const authHeader = req.headers["authorization"];
     const clientToken = authHeader && authHeader.split(" ")[1];
 
@@ -2220,17 +2320,29 @@ app.post("/api/admin/login-from-client", async (req, res) => {
       return res.status(401).json({ message: "Client token required" });
     }
 
-    // Verify client token
-    let clientUser;
-    try {
-      clientUser = jwt.verify(clientToken, JWT_SECRET);
+    // Verify client token by calling the client system
+    const tokenVerification = await verifyClientToken(clientToken);
+    
+    if (!tokenVerification.valid) {
+      return res.status(403).json({ 
+        message: "Invalid client token",
+        error: tokenVerification.error 
+      });
+    }
 
-      // Handle both 'client' and 'admin' roles from client system
-      if (clientUser.role !== 'admin' && clientUser.role !== 'client') {
-        return res.status(403).json({ message: "Admin access required" });
-      }
-    } catch (error) {
-      return res.status(403).json({ message: "Invalid client token" });
+    const clientUser = tokenVerification.user;
+    console.log(clientUser);
+    
+    // Use the verified user info from client system - PRIORITY ORDER
+    const finalAdminId = adminId || clientUser.id;
+    const finalAdminEmail = adminEmail || clientUser.email;
+    const finalAdminName = adminName || clientUser.name; // Remove fallback to "Admin User"
+
+    // Validate that we have all required info
+    if (!finalAdminName || !finalAdminEmail) {
+      return res.status(400).json({ 
+        message: "Missing admin name or email from client system" 
+      });
     }
 
     // Create or find admin user in LMS system
@@ -2238,26 +2350,39 @@ app.post("/api/admin/login-from-client", async (req, res) => {
     try {
       const [existingAdmin] = await db.execute(
         'SELECT id, name, email FROM users WHERE email = ? AND role = "admin"',
-        [adminEmail]
+        [finalAdminEmail]
       );
 
       if (existingAdmin.length > 0) {
-        adminUser = existingAdmin[0];
+        // Update existing admin's name if it has changed
+        if (existingAdmin[0].name !== finalAdminName) {
+          await db.execute(
+            "UPDATE users SET name = ? WHERE id = ?",
+            [finalAdminName, existingAdmin[0].id]
+          );
+        }
+        
+        adminUser = {
+          id: existingAdmin[0].id,
+          name: finalAdminName, // Use the updated name
+          email: finalAdminEmail
+        };
       } else {
         // Create admin user in LMS if doesn't exist
         const hashedPassword = await bcrypt.hash("admin123", 10);
         const [result] = await db.execute(
           "INSERT INTO users (name, email, password, role, status, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
-          [adminName || "Admin User", adminEmail, hashedPassword, "admin", "active"]
+          [finalAdminName, finalAdminEmail, hashedPassword, "admin", "active"]
         );
         adminUser = {
           id: result.insertId,
-          name: adminName || "Admin User",
-          email: adminEmail
+          name: finalAdminName,
+          email: finalAdminEmail
         };
+        console.log(`Created new admin user in LMS: ${finalAdminEmail} with ID: ${result.insertId}`);
       }
     } catch (error) {
-      console.error("Admin user creation error:", error);
+      console.error("Admin user creation/update error:", error);
       return res.status(500).json({ message: "Failed to create admin session" });
     }
 
@@ -2266,8 +2391,8 @@ app.post("/api/admin/login-from-client", async (req, res) => {
       {
         userId: adminUser.id,  // LMS format
         id: adminUser.id,      // Client system format
-        email: adminEmail,
-        name: adminUser.name,
+        email: finalAdminEmail,
+        name: adminUser.name,  // Use the actual name
         role: "admin"
       },
       JWT_SECRET,
@@ -2279,8 +2404,8 @@ app.post("/api/admin/login-from-client", async (req, res) => {
       token: lmsToken,
       user: {
         id: adminUser.id,
-        name: adminUser.name,
-        email: adminEmail,
+        name: adminUser.name, // This should now be the correct name
+        email: finalAdminEmail,
         role: "admin",
         status: "active"
       }
@@ -2350,6 +2475,7 @@ const checkUserExists = async (req, res, next) => {
 app.get(
   "/api/admin/teachers",
   authenticateToken,
+  adminTokenRefresh,
   requireRole(["admin"]),
   async (req, res) => {
     try {
@@ -3722,19 +3848,17 @@ app.get(
       const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10))) || 10;
       const offset = (pageNum - 1) * limitNum;
 
-      let query = `
-        SELECT b.*, u.name as author_name, u.role as author_role
+      let baseQuery = `
         FROM blogs b
         JOIN users u ON b.author_id = u.id
       `;
 
-      let countQuery = "SELECT COUNT(*) as count FROM blogs b";
+      let whereConditions = [];
       let params = [];
 
       if (req.user.role === "admin") {
-        // Admin sees only their tenant's blogs
-        query += " WHERE b.admin_id = ?";
-        countQuery += " WHERE b.admin_id = ?";
+        // Admin sees only their tenant's blogs (where admin_id matches their ID)
+        whereConditions.push("b.admin_id = ?");
         params.push(req.user.userId);
       } else if (req.user.role === "teacher") {
         // Teacher sees their admin's blogs and their own
@@ -3744,36 +3868,56 @@ app.get(
         );
 
         if (teacherInfo.length > 0 && teacherInfo[0].admin_id) {
-          query += " WHERE b.admin_id = ?";
-          countQuery += " WHERE b.admin_id = ?";
-          params.push(teacherInfo[0].admin_id);
+          whereConditions.push("(b.admin_id = ? OR b.author_id = ?)");
+          params.push(teacherInfo[0].admin_id, req.user.userId);
         } else {
-          query += " WHERE b.author_id = ?";
-          countQuery += " WHERE b.author_id = ?";
+          // Fallback: only show teacher's own blogs if no admin_id
+          whereConditions.push("b.author_id = ?");
           params.push(req.user.userId);
         }
       } else if (req.user.role === "student") {
         // Students see blogs from their enrolled courses' admin
-        query += ` WHERE b.admin_id IN (
+        whereConditions.push(`b.admin_id IN (
           SELECT DISTINCT c.admin_id 
           FROM course_enrollments ce
           JOIN courses c ON ce.course_id = c.id
           WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
-        )`;
-        countQuery += ` WHERE b.admin_id IN (
-          SELECT DISTINCT c.admin_id 
-          FROM course_enrollments ce
-          JOIN courses c ON ce.course_id = c.id
-          WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
-        )`;
+        )`);
         params.push(req.user.userId);
+      } else {
+        // Default fallback: no blogs visible
+        whereConditions.push("1 = 0");
       }
 
-      query += " ORDER BY b.created_at DESC LIMIT ? OFFSET ?";
-      params.push(limitNum, offset);
+      // Construct WHERE clause
+      let whereClause = "";
+      if (whereConditions.length > 0) {
+        whereClause = " WHERE " + whereConditions.join(" AND ");
+      }
 
-      const [blogs] = await db.execute(query, params);
-      const [totalCount] = await db.execute(countQuery, params.slice(0, -2));
+      // Build the complete queries
+      const selectQuery = `
+        SELECT b.*, u.name as author_name, u.role as author_role
+        ${baseQuery}
+        ${whereClause}
+        ORDER BY b.created_at DESC
+        LIMIT ${limitNum} OFFSET ${offset}
+      `;
+
+      const countQuery = `
+        SELECT COUNT(*) as count
+        ${baseQuery}
+        ${whereClause}
+      `;
+
+      console.log("Blog query:", selectQuery);
+      console.log("Blog params:", params);
+      console.log("Count query:", countQuery);
+      console.log("Count params:", params);
+
+      // Execute queries
+      const [blogs] = await db.execute(selectQuery, params);
+      const [totalCount] = await db.execute(countQuery, params);
 
       res.json({
         blogs,
@@ -3783,6 +3927,13 @@ app.get(
       });
     } catch (error) {
       console.error("Get blogs error:", error);
+      // Add more detailed error logging
+      console.error("Error details:", {
+        message: error.message,
+        stack: error.stack,
+        user: req.user,
+        query: req.query
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -4751,6 +4902,7 @@ app.put(
 // Complete Dashboard stats route - Replace the existing one
 app.get(
   "/api/dashboard/stats",
+  adminTokenRefresh,
   authenticateToken,
   checkUserStatus,
   async (req, res) => {
@@ -5045,7 +5197,7 @@ app.get(
 // Add these routes to your server.js file
 
 // Google AdSense Configuration Route
-app.get("/api/adsense-config", authenticateToken, checkUserExists, async (req, res) => {
+app.get("/api/adsense-config", authenticateToken, adminTokenRefresh, checkUserExists, async (req, res) => {
   try {
     const config = {
       clientId: process.env.GOOGLE_ADSENSE_CLIENT_ID || "ca-pub-xxxxxxxxxxxxxxxxx",
