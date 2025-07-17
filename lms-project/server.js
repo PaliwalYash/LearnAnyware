@@ -181,6 +181,25 @@ async function migrateExistingData() {
   }
 }
 
+async function createAdSenseTable() {
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS adsense_settings (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      admin_id INT NOT NULL,
+      enabled BOOLEAN DEFAULT FALSE,
+      test_mode BOOLEAN DEFAULT TRUE,
+      client_id VARCHAR(255) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE KEY unique_admin_adsense (admin_id)
+    )`);
+    console.log("AdSense settings table created successfully");
+  } catch (error) {
+    console.log("AdSense settings table already exists or error:", error.message);
+  }
+}
+
 
 // Initialize database
 async function initDatabase() {
@@ -200,15 +219,36 @@ async function initDatabase() {
     await createTables();
     await createDefaultAdmin();
     await migrateExistingData();
+    await createAdSenseTable();
   } catch (error) {
     console.error("Database connection failed:", error);
     process.exit(1);
+  }
+}
+async function addAdSenseTable() {
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS adsense_settings (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      admin_id INT NOT NULL,
+      enabled BOOLEAN DEFAULT FALSE,
+      test_mode BOOLEAN DEFAULT TRUE,
+      client_id VARCHAR(255) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE KEY unique_admin_adsense (admin_id)
+    )`);
+    console.log("AdSense settings table created successfully");
+  } catch (error) {
+    console.log("AdSense settings table already exists or error:", error.message);
   }
 }
 
 // Create database tables
 async function createTables() {
   // Create users table with basic columns first
+  await addAdSenseTable();
+  
   await db.query(`CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -778,15 +818,15 @@ const authenticateToken = (req, res, next) => {
     if (err) {
       // If LMS token verification fails, check if it's a client token for admin requests
       const isAdminRoute = req.path.includes('/admin') || req.method === 'POST' && req.path.includes('/admin/login-from-client');
-      
+
       if (isAdminRoute) {
         try {
           // Verify as client token
           const tokenVerification = await verifyClientToken(token);
-          
+
           if (tokenVerification.valid) {
             const clientUser = tokenVerification.user;
-          
+
             // Format user object for LMS compatibility
             req.user = {
               userId: clientUser.id,
@@ -795,14 +835,14 @@ const authenticateToken = (req, res, next) => {
               name: clientUser.name,
               role: 'admin'
             };
-            
+
             return next();
           }
         } catch (verifyError) {
           console.error("Client token verification failed:", verifyError);
         }
       }
-      
+
       return res.status(403).json({ message: "Invalid or expired token" });
     }
 
@@ -971,7 +1011,7 @@ const checkUserStatus = async (req, res, next) => {
       // Check admin status for teachers and students
       if (req.user.role === 'teacher' || req.user.role === 'student') {
         let adminIdToCheck = null;
-        
+
         if (req.user.role === 'teacher' && user[0].admin_id) {
           adminIdToCheck = user[0].admin_id;
         } else if (req.user.role === 'student') {
@@ -983,7 +1023,7 @@ const checkUserStatus = async (req, res, next) => {
             WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
             LIMIT 1
           `, [userId]);
-          
+
           if (adminInfo.length > 0) {
             adminIdToCheck = adminInfo[0].admin_id;
           }
@@ -991,7 +1031,7 @@ const checkUserStatus = async (req, res, next) => {
 
         if (adminIdToCheck) {
           const adminStatus = await checkAdminStatus(adminIdToCheck);
-          
+
           if (!adminStatus.active) {
             return res.status(403).json({
               message: "Service temporarily unavailable. Please contact your administrator.",
@@ -1098,7 +1138,7 @@ const adminTokenRefresh = async (req, res, next) => {
           "INSERT INTO users (name, email, password, role, status, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
           [req.user.name || "Admin User", req.user.email, hashedPassword, "admin", "active"]
         );
-        
+
         req.user.userId = result.insertId;
         req.user.id = result.insertId;
         console.log(`Auto-created admin user: ${req.user.email} with ID: ${result.insertId}`);
@@ -1147,7 +1187,7 @@ app.post("/api/login", async (req, res) => {
     // Check admin status for teachers and students
     if (user.role === 'teacher' || user.role === 'student') {
       let adminIdToCheck = null;
-      
+
       if (user.role === 'teacher' && user.admin_id) {
         adminIdToCheck = user.admin_id;
       } else if (user.role === 'student') {
@@ -1160,7 +1200,7 @@ app.post("/api/login", async (req, res) => {
           WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
           LIMIT 1
         `, [user.id]);
-        
+
         if (adminInfo.length > 0) {
           adminIdToCheck = adminInfo[0].admin_id;
         }
@@ -1168,7 +1208,7 @@ app.post("/api/login", async (req, res) => {
 
       if (adminIdToCheck) {
         const adminStatus = await checkAdminStatus(adminIdToCheck);
-        
+
         if (!adminStatus.active) {
           return res.status(403).json({
             message: "Service temporarily unavailable. Please contact your administrator.",
@@ -2249,6 +2289,50 @@ app.delete(
     }
   }
 );
+const checkAdsEnabled = async (req, res, next) => {
+  try {
+    let adminId = null;
+
+    if (req.user.role === "admin") {
+      adminId = req.user.userId;
+    } else if (req.user.role === "teacher") {
+      const [teacherInfo] = await db.execute(
+        "SELECT admin_id FROM users WHERE id = ? AND role = 'teacher'",
+        [req.user.userId]
+      );
+      adminId = teacherInfo[0]?.admin_id;
+    } else if (req.user.role === "student") {
+      const [adminInfo] = await db.execute(`
+        SELECT DISTINCT c.admin_id 
+        FROM course_enrollments ce
+        JOIN courses c ON ce.course_id = c.id
+        WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
+        LIMIT 1
+      `, [req.user.userId]);
+      adminId = adminInfo[0]?.admin_id;
+    }
+
+    // Default to ads disabled
+    req.adsEnabled = false;
+
+    if (adminId) {
+      const [settings] = await db.execute(
+        "SELECT enabled FROM adsense_settings WHERE admin_id = ?",
+        [adminId]
+      );
+
+      if (settings.length > 0) {
+        req.adsEnabled = Boolean(settings[0].enabled);
+      }
+    }
+
+    next();
+  } catch (error) {
+    console.error("Check ads enabled error:", error);
+    req.adsEnabled = false;
+    next();
+  }
+};
 // Admin Routes
 app.post(
   "/api/admin/create-teacher",
@@ -2322,17 +2406,17 @@ app.post("/api/admin/login-from-client", async (req, res) => {
 
     // Verify client token by calling the client system
     const tokenVerification = await verifyClientToken(clientToken);
-    
+
     if (!tokenVerification.valid) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         message: "Invalid client token",
-        error: tokenVerification.error 
+        error: tokenVerification.error
       });
     }
 
     const clientUser = tokenVerification.user;
     console.log(clientUser);
-    
+
     // Use the verified user info from client system - PRIORITY ORDER
     const finalAdminId = adminId || clientUser.id;
     const finalAdminEmail = adminEmail || clientUser.email;
@@ -2340,8 +2424,8 @@ app.post("/api/admin/login-from-client", async (req, res) => {
 
     // Validate that we have all required info
     if (!finalAdminName || !finalAdminEmail) {
-      return res.status(400).json({ 
-        message: "Missing admin name or email from client system" 
+      return res.status(400).json({
+        message: "Missing admin name or email from client system"
       });
     }
 
@@ -2361,7 +2445,7 @@ app.post("/api/admin/login-from-client", async (req, res) => {
             [finalAdminName, existingAdmin[0].id]
           );
         }
-        
+
         adminUser = {
           id: existingAdmin[0].id,
           name: finalAdminName, // Use the updated name
@@ -3840,6 +3924,7 @@ app.get(
   "/api/blogs",
   authenticateToken,
   checkUserStatus,
+  checkAdsEnabled, // Add this middleware
   async (req, res) => {
     try {
       const { page = 1, limit = 10 } = req.query;
@@ -3857,11 +3942,9 @@ app.get(
       let params = [];
 
       if (req.user.role === "admin") {
-        // Admin sees only their tenant's blogs (where admin_id matches their ID)
         whereConditions.push("b.admin_id = ?");
         params.push(req.user.userId);
       } else if (req.user.role === "teacher") {
-        // Teacher sees their admin's blogs and their own
         const [teacherInfo] = await db.execute(
           "SELECT admin_id FROM users WHERE id = ?",
           [req.user.userId]
@@ -3871,12 +3954,10 @@ app.get(
           whereConditions.push("(b.admin_id = ? OR b.author_id = ?)");
           params.push(teacherInfo[0].admin_id, req.user.userId);
         } else {
-          // Fallback: only show teacher's own blogs if no admin_id
           whereConditions.push("b.author_id = ?");
           params.push(req.user.userId);
         }
       } else if (req.user.role === "student") {
-        // Students see blogs from their enrolled courses' admin
         whereConditions.push(`b.admin_id IN (
           SELECT DISTINCT c.admin_id 
           FROM course_enrollments ce
@@ -3885,17 +3966,14 @@ app.get(
         )`);
         params.push(req.user.userId);
       } else {
-        // Default fallback: no blogs visible
         whereConditions.push("1 = 0");
       }
 
-      // Construct WHERE clause
       let whereClause = "";
       if (whereConditions.length > 0) {
         whereClause = " WHERE " + whereConditions.join(" AND ");
       }
 
-      // Build the complete queries
       const selectQuery = `
         SELECT b.*, u.name as author_name, u.role as author_role
         ${baseQuery}
@@ -3910,12 +3988,6 @@ app.get(
         ${whereClause}
       `;
 
-      console.log("Blog query:", selectQuery);
-      console.log("Blog params:", params);
-      console.log("Count query:", countQuery);
-      console.log("Count params:", params);
-
-      // Execute queries
       const [blogs] = await db.execute(selectQuery, params);
       const [totalCount] = await db.execute(countQuery, params);
 
@@ -3923,17 +3995,11 @@ app.get(
         blogs,
         totalCount: totalCount[0].count,
         currentPage: pageNum,
-        totalPages: Math.ceil(totalCount[0].count / limitNum)
+        totalPages: Math.ceil(totalCount[0].count / limitNum),
+        adsEnabled: req.adsEnabled // Include ads status in response
       });
     } catch (error) {
       console.error("Get blogs error:", error);
-      // Add more detailed error logging
-      console.error("Error details:", {
-        message: error.message,
-        stack: error.stack,
-        user: req.user,
-        query: req.query
-      });
       res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -5197,14 +5263,63 @@ app.get(
 // Add these routes to your server.js file
 
 // Google AdSense Configuration Route
-app.get("/api/adsense-config", authenticateToken, adminTokenRefresh, checkUserExists, async (req, res) => {
+app.get("/api/adsense-config", authenticateToken, checkUserStatus, async (req, res) => {
   try {
-    const config = {
-      clientId: process.env.GOOGLE_ADSENSE_CLIENT_ID || "ca-pub-xxxxxxxxxxxxxxxxx",
-      enabled: process.env.GOOGLE_ADSENSE_ENABLED === 'true',
-      testMode: process.env.ADSENSE_TEST_MODE === 'true'
-    };
-    res.json(config);
+    let adminId = null;
+
+    // Determine the admin ID based on user role
+    if (req.user.role === "admin") {
+      adminId = req.user.userId;
+    } else if (req.user.role === "teacher") {
+      // Get teacher's admin_id
+      const [teacherInfo] = await db.execute(
+        "SELECT admin_id FROM users WHERE id = ? AND role = 'teacher'",
+        [req.user.userId]
+      );
+      adminId = teacherInfo[0]?.admin_id;
+    } else if (req.user.role === "student") {
+      // For students, find their admin through enrolled courses
+      const [adminInfo] = await db.execute(`
+        SELECT DISTINCT c.admin_id 
+        FROM course_enrollments ce
+        JOIN courses c ON ce.course_id = c.id
+        WHERE ce.student_id = ? AND c.admin_id IS NOT NULL
+        LIMIT 1
+      `, [req.user.userId]);
+      adminId = adminInfo[0]?.admin_id;
+    }
+
+    if (!adminId) {
+      // Return default disabled config if no admin found
+      return res.json({
+        enabled: false,
+        testMode: true,
+        clientId: null
+      });
+    }
+
+    // Get settings from database
+    const [settings] = await db.execute(
+      "SELECT * FROM adsense_settings WHERE admin_id = ?",
+      [adminId]
+    );
+
+    if (settings.length === 0) {
+      // Return default settings if none exist
+      return res.json({
+        enabled: false,
+        testMode: true,
+        clientId: process.env.GOOGLE_ADSENSE_CLIENT_ID || null
+      });
+    }
+
+    const config = settings[0];
+    res.json({
+      enabled: Boolean(config.enabled),
+      testMode: Boolean(config.test_mode),
+      clientId: config.client_id || process.env.GOOGLE_ADSENSE_CLIENT_ID || null
+    });
+
   } catch (error) {
     console.error("AdSense config error:", error);
     res.status(500).json({ message: "Internal server error" });
@@ -5216,19 +5331,279 @@ app.put(
   "/api/admin/adsense-settings",
   authenticateToken,
   requireRole(["admin"]),
+  checkUserStatus,
   async (req, res) => {
     try {
-      const { enabled, testMode } = req.body;
+      const { enabled, testMode, clientId } = req.body;
+      const adminId = req.user.userId;
 
-      // In a production app, you'd save this to database
-      // For now, we'll just return success
+      // Validate input
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ message: "Enabled must be a boolean value" });
+      }
+
+      if (typeof testMode !== 'boolean') {
+        return res.status(400).json({ message: "Test mode must be a boolean value" });
+      }
+
+      if (clientId && !clientId.startsWith('ca-pub-')) {
+        return res.status(400).json({ message: "Invalid client ID format" });
+      }
+
+      // Insert or update settings
+      await db.execute(`
+        INSERT INTO adsense_settings (admin_id, enabled, test_mode, client_id)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          enabled = VALUES(enabled),
+          test_mode = VALUES(test_mode),
+          client_id = VALUES(client_id),
+          updated_at = NOW()
+      `, [adminId, enabled, testMode, clientId || null]);
+
+      // Log the change for audit purposes
+      console.log(`Admin ${adminId} updated AdSense settings: enabled=${enabled}, testMode=${testMode}, clientId=${clientId ? 'set' : 'not set'}`);
+
       res.json({
         message: "AdSense settings updated successfully",
-        enabled,
-        testMode
+        settings: {
+          enabled,
+          testMode,
+          clientId: clientId || null
+        }
       });
+
     } catch (error) {
       console.error("Update AdSense settings error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/adsense-settings",
+  authenticateToken,
+  requireRole(["admin"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const adminId = req.user.userId;
+
+      const [settings] = await db.execute(
+        "SELECT * FROM adsense_settings WHERE admin_id = ?",
+        [adminId]
+      );
+
+      if (settings.length === 0) {
+        // Return default settings
+        return res.json({
+          enabled: false,
+          testMode: true,
+          clientId: null,
+          created_at: null,
+          updated_at: null
+        });
+      }
+
+      const config = settings[0];
+      res.json({
+        enabled: Boolean(config.enabled),
+        testMode: Boolean(config.test_mode),
+        clientId: config.client_id,
+        created_at: config.created_at,
+        updated_at: config.updated_at
+      });
+
+    } catch (error) {
+      console.error("Get AdSense settings error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+app.delete(
+  "/api/admin/adsense-settings",
+  authenticateToken,
+  requireRole(["admin"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const adminId = req.user.userId;
+
+      await db.execute(
+        "DELETE FROM adsense_settings WHERE admin_id = ?",
+        [adminId]
+      );
+
+      console.log(`Admin ${adminId} reset AdSense settings to default`);
+
+      res.json({
+        message: "AdSense settings reset to default",
+        settings: {
+          enabled: false,
+          testMode: true,
+          clientId: null
+        }
+      });
+
+    } catch (error) {
+      console.error("Reset AdSense settings error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+app.get(
+  "/api/admin/adsense-stats",
+  authenticateToken,
+  requireRole(["admin"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const adminId = req.user.userId;
+
+      // Get current settings
+      const [settings] = await db.execute(
+        "SELECT * FROM adsense_settings WHERE admin_id = ?",
+        [adminId]
+      );
+
+      // Count users who would see ads
+      const [userStats] = await db.execute(`
+        SELECT 
+          COUNT(CASE WHEN u.role = 'teacher' AND u.admin_id = ? THEN 1 END) as teachers,
+          COUNT(CASE WHEN u.role = 'student' AND u.id IN (
+            SELECT DISTINCT ce.student_id 
+            FROM course_enrollments ce
+            JOIN courses c ON ce.course_id = c.id
+            WHERE c.admin_id = ?
+          ) THEN 1 END) as students
+        FROM users u
+      `, [adminId, adminId]);
+
+      // Count blog posts that could show ads
+      const [blogStats] = await db.execute(
+        "SELECT COUNT(*) as blog_count FROM blogs WHERE admin_id = ?",
+        [adminId]
+      );
+
+      // Count courses for potential ad placements
+      const [courseStats] = await db.execute(`
+        SELECT COUNT(*) as course_count 
+        FROM courses c
+        JOIN users t ON c.teacher_id = t.id
+        WHERE t.admin_id = ?
+      `, [adminId]);
+
+      const config = settings[0] || { enabled: false, test_mode: true };
+      const stats = userStats[0] || { teachers: 0, students: 0 };
+      const blogs = blogStats[0] || { blog_count: 0 };
+      const courses = courseStats[0] || { course_count: 0 };
+
+      // Calculate potential ad placements
+      const estimatedAdPlacements = 
+        (blogs.blog_count * 2) + // 2 ads per blog post
+        (courses.course_count * 3) + // 3 ads per course page
+        (stats.students * 1.5); // Average course enrollments per student
+
+      res.json({
+        settings: {
+          enabled: Boolean(config.enabled),
+          testMode: Boolean(config.test_mode),
+          clientId: config.client_id ? 'configured' : 'not configured',
+          lastUpdated: config.updated_at
+        },
+        potentialAudience: {
+          teachers: stats.teachers,
+          students: stats.students,
+          total: stats.teachers + stats.students
+        },
+        content: {
+          blogPosts: blogs.blog_count,
+          courses: courses.course_count,
+          estimatedAdPlacements: Math.ceil(estimatedAdPlacements)
+        },
+        revenue: {
+          estimatedMonthlyViews: Math.ceil((stats.teachers + stats.students) * 150), // Estimate based on active users
+          potentialRpm: config.test_mode ? '$0.50 - $2.00' : '$1.00 - $5.00'
+        },
+        recommendations: [
+          config.enabled ? 
+            (config.test_mode ? "Switch to live mode when ready for real revenue" : "Monitor performance in AdSense dashboard") :
+            "Enable AdSense to start monetizing your content",
+          `You have ${stats.teachers + stats.students} potential ad viewers`,
+          blogs.blog_count > 0 ? `${blogs.blog_count} blog posts ready for ads` : "Create blog content to increase ad revenue",
+          courses.course_count > 0 ? `${courses.course_count} courses can display ads` : "Add more courses to increase ad inventory"
+        ],
+        status: config.enabled ? 'active' : 'inactive'
+      });
+
+    } catch (error) {
+      console.error("Get AdSense stats error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+app.post(
+  "/api/admin/adsense-test",
+  authenticateToken,
+  requireRole(["admin"]),
+  checkUserStatus,
+  async (req, res) => {
+    try {
+      const adminId = req.user.userId;
+
+      // Get current settings
+      const [settings] = await db.execute(
+        "SELECT * FROM adsense_settings WHERE admin_id = ?",
+        [adminId]
+      );
+
+      if (settings.length === 0 || !settings[0].enabled) {
+        return res.status(400).json({
+          message: "AdSense is not enabled. Please enable it first.",
+          success: false
+        });
+      }
+
+      const config = settings[0];
+
+      // Validate client ID format
+      if (!config.client_id || !config.client_id.startsWith('ca-pub-')) {
+        return res.status(400).json({
+          message: "Invalid or missing AdSense client ID. Please configure it properly.",
+          success: false
+        });
+      }
+
+      // Log the test
+      console.log(`Admin ${adminId} tested AdSense configuration`);
+
+      res.json({
+        message: "AdSense configuration appears valid",
+        success: true,
+        config: {
+          enabled: true,
+          testMode: Boolean(config.test_mode),
+          clientId: config.client_id.substring(0, 15) + '...', // Partial ID for security
+          configured: true
+        },
+        testResults: {
+          clientIdFormat: config.client_id.startsWith('ca-pub-') ? 'Valid' : 'Invalid',
+          settingsConfigured: true,
+          databaseConnection: 'Working',
+          lastTested: new Date().toISOString()
+        },
+        recommendations: [
+          config.test_mode ? "Currently in test mode - switch to live mode when ready" : "Live mode active",
+          "Ensure your domain is added to your AdSense account",
+          "Allow 24-48 hours for ads to start appearing consistently",
+          "Monitor ad performance in your AdSense dashboard",
+          "Test ads on different pages to ensure proper loading"
+        ]
+      });
+
+    } catch (error) {
+      console.error("Test AdSense configuration error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   }

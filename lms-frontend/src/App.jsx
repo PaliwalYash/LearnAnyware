@@ -1176,8 +1176,8 @@ const LearningManagementSystem = () => {
               }
 
               const verifiedUser = await verifyResponse.json();
-              console.log("checking verifyuser",verified);
-              
+              console.log("checking verifyuser", verified);
+
               // Now create LMS session with verified user data
               const refreshResponse = await fetch(`${LMS_API_BASE}/admin/login-from-client`, {
                 method: "POST",
@@ -1776,36 +1776,53 @@ const LearningManagementSystem = () => {
   const fetchAdsenseConfig = async () => {
     try {
       const data = await apiCall("/adsense-config");
+      console.log('Fetched AdSense config:', data);
+
       setAdsConfig(data);
       setAdsEnabled(data.enabled);
-      if (typeof adsenseManager !== 'undefined') {
-        adsenseManager.setEnabled(data.enabled);
-      }
+
+      // Update the adsense manager
+      adsenseManager.setConfig(data);
+
+      console.log('AdSense manager updated with config:', data);
     } catch (error) {
       console.error("Fetch AdSense config error:", error);
       setAdsEnabled(false);
-      if (typeof adsenseManager !== 'undefined') {
-        adsenseManager.setEnabled(false);
-      }
+      adsenseManager.setConfig({ enabled: false, testMode: true, clientId: null });
     }
   };
-
-  const updateAdsenseSettings = async (enabled, testMode) => {
+  const updateAdsenseSettings = async (enabled, testMode, clientId = null) => {
     try {
       await apiCall("/admin/adsense-settings", {
         method: "PUT",
-        body: JSON.stringify({ enabled, testMode }),
+        body: JSON.stringify({ enabled, testMode, clientId }),
       });
 
-      setAdsConfig(prev => ({ ...prev, enabled, testMode }));
+      const newConfig = { enabled, testMode, clientId };
+      setAdsConfig(newConfig);
       setAdsEnabled(enabled);
-      adsenseManager.setEnabled(enabled);
 
-      showMessage("AdSense settings updated successfully!", "success");
+      // Update the adsense manager immediately
+      adsenseManager.setConfig(newConfig);
 
-      // Optionally reload page to apply changes immediately
-      if (!enabled) {
-        adsenseManager.removeScript();
+      showMessage(`AdSense ${enabled ? 'enabled' : 'disabled'} successfully!`, "success");
+
+      console.log(`AdSense ${enabled ? 'enabled' : 'disabled'}, ads should ${enabled ? 'appear' : 'disappear'} immediately`);
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  };
+
+  const testAdsenseConfiguration = async () => {
+    try {
+      const data = await apiCall("/admin/adsense-test", {
+        method: "POST",
+      });
+
+      if (data.success) {
+        showMessage("AdSense configuration test successful!", "success");
+      } else {
+        showMessage(data.message, "error");
       }
     } catch (error) {
       showMessage(error.message, "error");
@@ -2378,15 +2395,15 @@ const LearningManagementSystem = () => {
             "Content-Type": "application/json"
           }
         });
-        console.log(verifyResponse.body ,"sdjwndj");
-        
+        console.log(verifyResponse.body, "sdjwndj");
+
         if (!verifyResponse.ok) {
           throw new Error("Client token verification failed");
         }
 
         const verifiedUser = await verifyResponse.json();
-        console.log("verifired user ",verifiedUser);
-        
+        console.log("verifired user ", verifiedUser);
+
         // Create LMS admin session with verified user data
         try {
           console.log("Creating LMS admin session...");
@@ -3339,11 +3356,11 @@ const LearningManagementSystem = () => {
     try {
       console.log("Fetching initial data for user:", userData);
 
-      // Always try to fetch dashboard stats first
-      await fetchDashboardStats();
-
-      // Then fetch AdSense config
+      // Always fetch AdSense config first
       await fetchAdsenseConfig();
+
+      // Always try to fetch dashboard stats
+      await fetchDashboardStats();
 
       // Try to fetch blogs but don't fail the entire initialization if it fails
       try {
@@ -3353,6 +3370,7 @@ const LearningManagementSystem = () => {
         // Continue with other initialization
       }
 
+      // ... rest of your existing fetchInitialData code
       if (userData.role === "admin") {
         await fetchTeachers();
       } else if (userData.role === "teacher") {
@@ -4999,18 +5017,22 @@ const LearningManagementSystem = () => {
                           onDelete={deleteBlog}
                         />
 
-                        {/* Show ad after every 2 blog posts */}
-                        {adsEnabled && (index + 1) % 2 === 0 && index < blogs.length - 1 && (
+                        {/* Show ad after every 2 blog posts - will be hidden if ads disabled */}
+                        {(index + 1) % 2 === 0 && index < blogs.length - 1 && (
                           <ResponsiveAd adSlot="1111111111" />
                         )}
                       </React.Fragment>
                     ))}
                   </div>
 
-                  {/* Bottom banner ad */}
-                  {adsEnabled && blogs.length > 0 && (
+                  {/* Bottom banner ad - will be hidden if ads disabled */}
+                  {blogs.length > 0 && (
                     <BannerAd adSlot="2222222222" />
                   )}
+                  {/* Side Ad for larger screens - will be hidden if ads disabled */}
+                  <div className="hidden lg:block">
+                    <SquareAd adSlot="0987654321" />
+                  </div>
 
                   {/* Enhanced Pagination */}
                   {blogTotalPages > 1 && (
@@ -5372,72 +5394,144 @@ const LearningManagementSystem = () => {
               {user.role === "admin" && (
                 <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
                   <h3 className="text-lg font-semibold text-white mb-4">
-                    Google AdSense Settings
+                    Google AdSense Management
                   </h3>
 
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <label className="text-sm font-medium text-gray-300">
-                          Enable Advertisements
-                        </label>
-                        <p className="text-xs text-gray-500">
-                          Show Google AdSense ads throughout the platform
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => updateAdsenseSettings(!adsConfig.enabled, adsConfig.testMode)}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adsConfig.enabled ? 'bg-purple-600' : 'bg-gray-600'
-                          }`}
-                      >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adsConfig.enabled ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                        />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <label className="text-sm font-medium text-gray-300">
-                          Test Mode
-                        </label>
-                        <p className="text-xs text-gray-500">
-                          Show test ads instead of real ads
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => updateAdsenseSettings(adsConfig.enabled, !adsConfig.testMode)}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adsConfig.testMode ? 'bg-yellow-600' : 'bg-gray-600'
-                          }`}
-                      >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adsConfig.testMode ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                        />
-                      </button>
-                    </div>
-
+                  <div className="space-y-6">
+                    {/* Current Status */}
                     <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
-                      <h4 className="text-sm font-medium text-white mb-2">Current Configuration</h4>
-                      <div className="space-y-1 text-xs text-gray-400">
-                        <p>Client ID: {adsConfig.clientId || 'Not configured'}</p>
-                        <p>Status: {adsConfig.enabled ? 'Enabled' : 'Disabled'}</p>
-                        <p>Mode: {adsConfig.testMode ? 'Test Mode' : 'Production Mode'}</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-yellow-500/20 border border-yellow-500/30 p-3 rounded-xl">
-                      <div className="flex items-start">
-                        <AlertCircle className="h-4 w-4 text-yellow-400 mr-2 mt-0.5 flex-shrink-0" />
-                        <div>
-                          <p className="text-yellow-200 text-sm font-medium">Setup Required</p>
-                          <p className="text-yellow-200/80 text-xs">
-                            Replace the client ID in the code with your actual Google AdSense publisher ID
-                          </p>
+                      <h4 className="text-sm font-medium text-white mb-3">Current Status</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        <div className="flex items-center justify-between p-2 bg-slate-600/30 rounded-lg">
+                          <span className="text-gray-300">Status:</span>
+                          <span className={`font-medium ${adsConfig.enabled ? 'text-green-300' : 'text-red-300'}`}>
+                            {adsConfig.enabled ? '✅ Enabled' : '❌ Disabled'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-slate-600/30 rounded-lg">
+                          <span className="text-gray-300">Mode:</span>
+                          <span className={`font-medium ${adsConfig.testMode ? 'text-yellow-300' : 'text-blue-300'}`}>
+                            {adsConfig.testMode ? '🧪 Test' : '🟢 Live'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-slate-600/30 rounded-lg">
+                          <span className="text-gray-300">Client ID:</span>
+                          <span className="font-medium text-white text-xs">
+                            {adsConfig.clientId ? `${adsConfig.clientId.substring(0, 15)}...` : 'Not Set'}
+                          </span>
                         </div>
                       </div>
                     </div>
+
+                    {/* Controls */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Enable/Disable Toggle */}
+                      <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <label className="text-sm font-medium text-gray-300">
+                              Advertisement Display
+                            </label>
+                            <p className="text-xs text-gray-500">
+                              {adsConfig.enabled ? 'Ads are currently visible to users' : 'Ads are hidden from all users'}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => updateAdsenseSettings(!adsConfig.enabled, adsConfig.testMode, adsConfig.clientId)}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adsConfig.enabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adsConfig.enabled ? 'translate-x-6' : 'translate-x-1'}`}
+                            />
+                          </button>
+                        </div>
+
+                        {adsConfig.enabled && (
+                          <div className="text-xs text-green-300 bg-green-500/10 p-2 rounded border border-green-500/20">
+                            ✅ Ads are live and visible to users
+                          </div>
+                        )}
+
+                        {!adsConfig.enabled && (
+                          <div className="text-xs text-red-300 bg-red-500/10 p-2 rounded border border-red-500/20">
+                            ❌ Ads are disabled and hidden from users
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Test Mode Toggle */}
+                      <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <label className="text-sm font-medium text-gray-300">
+                              Test Mode
+                            </label>
+                            <p className="text-xs text-gray-500">
+                              {adsConfig.testMode ? 'Showing test ads' : 'Showing live ads'}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => updateAdsenseSettings(adsConfig.enabled, !adsConfig.testMode, adsConfig.clientId)}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adsConfig.testMode ? 'bg-yellow-600' : 'bg-blue-600'}`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adsConfig.testMode ? 'translate-x-6' : 'translate-x-1'}`}
+                            />
+                          </button>
+                        </div>
+
+                        {adsConfig.testMode && (
+                          <div className="text-xs text-yellow-300 bg-yellow-500/10 p-2 rounded border border-yellow-500/20">
+                            🧪 Test mode - showing test ads
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <button
+                        onClick={testAdsenseConfiguration}
+                        disabled={!adsConfig.enabled}
+                        className="flex-1 bg-blue-600 text-white px-4 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+                      >
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        Test Configuration
+                      </button>
+
+                      <button
+                        onClick={fetchAdsenseConfig}
+                        className="flex-1 bg-slate-600 text-white px-4 py-3 rounded-xl hover:bg-slate-700 transition-colors flex items-center justify-center"
+                      >
+                        <Settings className="h-4 w-4 mr-2" />
+                        Refresh Config
+                      </button>
+                    </div>
+
+                    {/* Instructions */}
+                    <div className="bg-slate-700/20 p-4 rounded-xl border border-white/10">
+                      <h4 className="text-sm font-medium text-white mb-2">Setup Instructions</h4>
+                      <ul className="text-xs text-gray-400 space-y-1">
+                        <li>• Replace the client ID in the code with your actual Google AdSense publisher ID</li>
+                        <li>• Add your domain to your AdSense account settings</li>
+                        <li>• Enable ads using the toggle above to make them visible to users</li>
+                        <li>• Use test mode during development to avoid policy violations</li>
+                        <li>• Allow 24-48 hours for ads to start appearing consistently</li>
+                        <li>• Monitor performance in your Google AdSense dashboard</li>
+                      </ul>
+                    </div>
+
+                    {/* Debug Info (only in development) */}
+                    {process.env.NODE_ENV === 'development' && (
+                      <div className="bg-slate-700/20 p-4 rounded-xl border border-white/10">
+                        <h4 className="text-sm font-medium text-white mb-2">Debug Information</h4>
+                        <div className="text-xs text-gray-400 space-y-1">
+                          <div>Manager Status: {adsenseManager.isEnabled() ? 'Enabled' : 'Disabled'}</div>
+                          <div>Script Loaded: {adsenseManager.isScriptLoaded() ? 'Yes' : 'No'}</div>
+                          <div>Should Show Ads: {adsenseManager.shouldShowAds() ? 'Yes' : 'No'}</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
