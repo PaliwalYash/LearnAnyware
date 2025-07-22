@@ -1,1 +1,30 @@
 @import "tailwindcss";
+/* Enhanced Video Controls Integration */
+.video-security-container video::-webkit-media-controls-panel {
+  background-color: rgba(0, 0, 0, 0.8) !important;
+}
+
+/* Position fullscreen button to align with native controls */
+@media (max-width: 640px) {
+  .video-security-container .absolute.bottom-2.right-12 {
+    right: 48px; /* Adjust for mobile volume button position */
+  }
+}
+
+@media (min-width: 641px) {
+  .video-security-container .absolute.bottom-3.right-16 {
+    right: 64px; /* Adjust for desktop volume button position */
+  }
+}
+
+/* Smooth hover effects for fullscreen button */
+.video-security-container button[title*="Fullscreen"] {
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.video-security-container button[title*="Fullscreen"]:hover {
+  background-color: rgba(0, 0, 0, 0.9) !important;
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: scale(1.05);
+}

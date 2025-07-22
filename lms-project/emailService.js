@@ -91,7 +91,7 @@ const getEmailTemplate = (type, data) => {
         </ul>
 
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" 
+          <a href="${process.env.FRONTEND_URL}" 
              style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                     color: white; 
                     padding: 12px 30px; 
@@ -154,7 +154,7 @@ const getEmailTemplate = (type, data) => {
         </ul>
 
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" 
+          <a href="${process.env.FRONTEND_URL}" 
              style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                     color: white; 
                     padding: 12px 30px; 
@@ -199,7 +199,7 @@ const getEmailTemplate = (type, data) => {
         </div>
 
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" 
+          <a href="${process.env.FRONTEND_URL}" 
              style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                     color: white; 
                     padding: 12px 30px; 

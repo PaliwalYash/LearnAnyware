@@ -138,8 +138,8 @@ const videoSecurityStyles = `
 import { adsenseManager } from './utils/adsenseManager';
 import { ResponsiveAd, SquareAd, BannerAd } from './components/AdSenseComponents';
 
-const API_BASE = "http://localhost:5000/api";
-const LMS_API_BASE = "http://localhost:5002/api";
+const API_BASE = "https://companydashboard.learnanyware.com/api";
+const LMS_API_BASE = "https://backend.learnanyware.com/api";
 
 // Add this component before your main LearningManagementSystem component
 const TeacherSearchInput = ({ value, onChange, onSelect, placeholder }) => {
@@ -387,7 +387,7 @@ const BlogPostCard = ({ blog, user, isLongContent, onEdit, onDelete }) => {
         <div className="px-6 pb-4">
           <div className="relative rounded-xl overflow-hidden bg-slate-700/30">
             <img
-              src={`http://localhost:5002${blog.image_url}`}
+              src={`https://backend.learnanyware.com${blog.image_url}`}
               alt={blog.title}
               className="w-full h-48 sm:h-64 object-cover hover:scale-105 transition-transform duration-500"
               loading="lazy"
@@ -520,57 +520,6 @@ const GoogleAdBanner = ({
     </div>
   );
 };
-
-// // Responsive Ad Component
-// const ResponsiveAd = ({ adSlot, className = "" }) => {
-//   return (
-//     <div className={`my-6 ${className}`}>
-//       <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
-//         <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
-//         <GoogleAdBanner
-//           adSlot={adSlot}
-//           adFormat="auto"
-//           fullWidthResponsive={true}
-//           style={{ minHeight: '250px' }}
-//         />
-//       </div>
-//     </div>
-//   );
-// };
-
-// // Square Ad Component
-// const SquareAd = ({ adSlot, className = "" }) => {
-//   return (
-//     <div className={`my-4 ${className}`}>
-//       <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
-//         <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
-//         <GoogleAdBanner
-//           adSlot={adSlot}
-//           adFormat="rectangle"
-//           fullWidthResponsive={false}
-//           style={{ width: '300px', height: '250px', margin: '0 auto' }}
-//         />
-//       </div>
-//     </div>
-//   );
-// };
-
-// // Horizontal Banner Ad
-// const BannerAd = ({ adSlot, className = "" }) => {
-//   return (
-//     <div className={`my-6 ${className}`}>
-//       <div className="bg-slate-800/30 rounded-xl p-4 border border-white/10">
-//         <p className="text-xs text-gray-500 mb-2 text-center">Advertisement</p>
-//         <GoogleAdBanner
-//           adSlot={adSlot}
-//           adFormat="horizontal"
-//           fullWidthResponsive={true}
-//           style={{ minHeight: '90px' }}
-//         />
-//       </div>
-//     </div>
-//   );
-// };
 
 const LearningManagementSystem = () => {
   const [user, setUser] = useState(null);
@@ -758,6 +707,46 @@ const LearningManagementSystem = () => {
   const [courseGroupLink, setCourseGroupLink] = useState(null);
   const [groupLinkLoading, setGroupLinkLoading] = useState(false);
   const [expandedPosts, setExpandedPosts] = useState(new Set());
+  const [showMobileTabMenu, setShowMobileTabMenu] = useState(false);
+  const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
+
+  const [studentSearchFilter, setStudentSearchFilter] = useState('');
+  const [mobileViewMode, setMobileViewMode] = useState('card'); // 'card' or 'list'
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('name');
+  const [currentStudentPage, setCurrentStudentPage] = useState(1);
+  const studentsPerPage = 10;
+
+  // Computed values
+  const filteredStudents = students.filter(student => {
+    const matchesSearch = !studentSearchFilter ||
+      student.name.toLowerCase().includes(studentSearchFilter.toLowerCase()) ||
+      student.email.toLowerCase().includes(studentSearchFilter.toLowerCase()) ||
+      (student.mobile && student.mobile.includes(studentSearchFilter));
+
+    const matchesStatus = statusFilter === 'all' ||
+      (statusFilter === 'completed' && student.completed_at) ||
+      (statusFilter === 'active' && !student.completed_at);
+
+    return matchesSearch && matchesStatus;
+  }).sort((a, b) => {
+    switch (sortBy) {
+      case 'enrolled':
+        return new Date(b.enrolled_at) - new Date(a.enrolled_at);
+      case 'progress':
+        const getProgress = (s) => s.completed_at ? 100 : s.project_status === 'approved' ? 90 : s.present_count > 0 ? 50 : 10;
+        return getProgress(b) - getProgress(a);
+      default:
+        return a.name.localeCompare(b.name);
+    }
+  });
+
+  const totalStudentPages = Math.ceil(filteredStudents.length / studentsPerPage);
+  const paginatedStudents = filteredStudents.slice(
+    (currentStudentPage - 1) * studentsPerPage,
+    currentStudentPage * studentsPerPage
+  );
 
 
   // Blog states
@@ -821,7 +810,6 @@ const LearningManagementSystem = () => {
           const clientToken = localStorage.getItem("clientToken");
 
           if (!clientToken) {
-            console.log("No client token found for admin, clearing session");
             localStorage.removeItem("token");
             localStorage.removeItem("user");
             return;
@@ -838,7 +826,6 @@ const LearningManagementSystem = () => {
             });
 
             if (!verifyResponse.ok) {
-              console.log("Client token invalid, clearing session");
               localStorage.removeItem("token");
               localStorage.removeItem("clientToken");
               localStorage.removeItem("user");
@@ -1149,13 +1136,11 @@ const LearningManagementSystem = () => {
 
         // Handle 401/403 errors for admin users
         if (user.role === "admin" && (response.status === 403 || response.status === 401)) {
-          console.log("Admin token expired or invalid, attempting refresh...");
 
           // Try to refresh LMS session using client token
           const clientToken = localStorage.getItem("clientToken");
           if (clientToken && baseUrl === LMS_API_BASE) {
             try {
-              console.log("Attempting to refresh admin session...");
 
               // First verify that the client token is still valid
               const verifyResponse = await fetch(`${API_BASE}/verify-token`, {
@@ -1176,7 +1161,6 @@ const LearningManagementSystem = () => {
               }
 
               const verifiedUser = await verifyResponse.json();
-              console.log("checking verifyuser", verified);
 
               // Now create LMS session with verified user data
               const refreshResponse = await fetch(`${LMS_API_BASE}/admin/login-from-client`, {
@@ -1195,7 +1179,6 @@ const LearningManagementSystem = () => {
               if (refreshResponse.ok) {
                 const refreshResult = await refreshResponse.json();
                 localStorage.setItem("token", refreshResult.token);
-                console.log("Admin session refreshed successfully");
 
                 // Retry original request with new token
                 const retryConfig = {
@@ -1638,7 +1621,6 @@ const LearningManagementSystem = () => {
     try {
       // Ensure page is a number and valid
       const pageNum = parseInt(page, 10) || 1;
-      console.log(`Fetching blogs for page: ${pageNum}`);
 
       const data = await apiCall(`/blogs?page=${pageNum}&limit=10`);
 
@@ -1776,7 +1758,6 @@ const LearningManagementSystem = () => {
   const fetchAdsenseConfig = async () => {
     try {
       const data = await apiCall("/adsense-config");
-      console.log('Fetched AdSense config:', data);
 
       setAdsConfig(data);
       setAdsEnabled(data.enabled);
@@ -1784,7 +1765,6 @@ const LearningManagementSystem = () => {
       // Update the adsense manager
       adsenseManager.setConfig(data);
 
-      console.log('AdSense manager updated with config:', data);
     } catch (error) {
       console.error("Fetch AdSense config error:", error);
       setAdsEnabled(false);
@@ -1807,7 +1787,6 @@ const LearningManagementSystem = () => {
 
       showMessage(`AdSense ${enabled ? 'enabled' : 'disabled'} successfully!`, "success");
 
-      console.log(`AdSense ${enabled ? 'enabled' : 'disabled'}, ads should ${enabled ? 'appear' : 'disappear'} immediately`);
     } catch (error) {
       showMessage(error.message, "error");
     }
@@ -2362,7 +2341,6 @@ const LearningManagementSystem = () => {
 
     try {
       if (authMode === "login" && authForm.role === "admin") {
-        console.log("Admin login attempt with:", authForm.email);
 
         // Use client management login for admin
         const response = await fetch(`${API_BASE}/login`, {
@@ -2382,7 +2360,6 @@ const LearningManagementSystem = () => {
           throw new Error(result.message || "Login failed");
         }
 
-        console.log("Client management login successful");
 
         // Store client management token
         localStorage.setItem("clientToken", result.token);
@@ -2395,18 +2372,15 @@ const LearningManagementSystem = () => {
             "Content-Type": "application/json"
           }
         });
-        console.log(verifyResponse.body, "sdjwndj");
 
         if (!verifyResponse.ok) {
           throw new Error("Client token verification failed");
         }
 
         const verifiedUser = await verifyResponse.json();
-        console.log("verifired user ", verifiedUser);
 
         // Create LMS admin session with verified user data
         try {
-          console.log("Creating LMS admin session...");
           const lmsResponse = await fetch(`${LMS_API_BASE}/admin/login-from-client`, {
             method: "POST",
             headers: {
@@ -2423,7 +2397,6 @@ const LearningManagementSystem = () => {
           const lmsResult = await lmsResponse.json();
 
           if (lmsResponse.ok) {
-            console.log("LMS admin session created successfully");
             localStorage.setItem("token", lmsResult.token);
             localStorage.setItem("user", JSON.stringify(lmsResult.user));
             setUser(lmsResult.user);
@@ -3354,7 +3327,6 @@ const LearningManagementSystem = () => {
   // Update the fetchInitialData function for teachers
   const fetchInitialData = async (userData) => {
     try {
-      console.log("Fetching initial data for user:", userData);
 
       // Always fetch AdSense config first
       await fetchAdsenseConfig();
@@ -3419,29 +3391,6 @@ const LearningManagementSystem = () => {
             </div>
           )}
 
-          {/* <div className="flex mb-6 bg-white/5 rounded-xl p-1">
-            <button
-              onClick={() => setAuthMode("login")}
-              className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
-                authMode === "login"
-                  ? "bg-white/20 text-white shadow-lg"
-                  : "text-gray-300 hover:text-white"
-              }`}
-            >
-              Sign In
-            </button>
-            <button
-              onClick={() => setAuthMode("register")}
-              className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
-                authMode === "register"
-                  ? "bg-white/20 text-white shadow-lg"
-                  : "text-gray-300 hover:text-white"
-              }`}
-            >
-              Register
-            </button>
-          </div> */}
-
           <form onSubmit={handleAuth} className="space-y-4">
             {authMode === "register" && (
               <div>
@@ -3504,24 +3453,13 @@ const LearningManagementSystem = () => {
                   onChange={(e) =>
                     setAuthForm({ ...authForm, role: e.target.value })
                   }
-                  className="w-full px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white "
+                  className="w-full px-4 py-3 bg-purple-400 backdrop-blur-sm border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white "
                 >
                   {/* <option value="student">Student</option>
                   <option value="teacher">Teacher</option> */}
-                  <option value="teacher">User</option>
+                  <option value="teacher">User/Teacher</option>
                   <option value="admin">Admin</option>
                 </select>
-              </div>
-            )}
-            {authMode === "login" && authForm.role === "admin" && (
-              <div className="mt-4 text-center">
-                <p className="text-gray-400 text-xs mb-2">Debug Info:</p>
-                <div className="space-y-1 text-xs text-gray-500">
-                  <p>Client API: {API_BASE || 'Not configured'}</p>
-                  <p>LMS API: {LMS_API_BASE || 'Not configured'}</p>
-                  <p>Client Token: {localStorage.getItem("clientToken") ? 'Present' : 'Missing'}</p>
-                  <p>LMS Token: {localStorage.getItem("token") ? 'Present' : 'Missing'}</p>
-                </div>
               </div>
             )}
 
@@ -3557,14 +3495,7 @@ const LearningManagementSystem = () => {
             </button>
           </form>
 
-          <div className="mt-6 text-center">
-            <p className="text-gray-400 text-sm mb-2">Demo Credentials:</p>
-            <div className="space-y-1 text-xs text-gray-500">
-              <p>Admin: Use your client management credentials</p>
-              <p>Teacher: teacher@lms.com / teacher123</p>
-              <p>Student: student@lms.com / student123</p>
-            </div>
-          </div>
+
         </div>
       </div>
     );
@@ -3651,19 +3582,20 @@ const LearningManagementSystem = () => {
       )}
 
       {/* Credentials Modal */}
+      {/* Credentials Modal - Mobile Responsive */}
       {showCredentials && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800/90 backdrop-blur-md rounded-2xl p-6 w-full max-w-md border border-white/20">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4">
+          <div className="bg-slate-800/90 backdrop-blur-md rounded-xl sm:rounded-2xl p-4 sm:p-6 w-full max-w-sm sm:max-w-md border border-white/20 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center mb-4">
-              <div className="h-10 w-10 bg-green-500/20 rounded-full flex items-center justify-center mr-3">
-                <CheckCircle className="h-5 w-5 text-green-400" />
+              <div className="h-8 w-8 sm:h-10 sm:w-10 bg-green-500/20 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
+                <CheckCircle className="h-4 w-4 sm:h-5 sm:w-5 text-green-400" />
               </div>
-              <h3 className="text-lg font-semibold text-white">
+              <h3 className="text-base sm:text-lg font-semibold text-white">
                 Account Created Successfully
               </h3>
             </div>
 
-            {/* Email Status */}
+            {/* Email Status - Mobile Responsive */}
             {emailStatus && (
               <div className={`mb-4 p-3 rounded-xl border ${emailStatus.type === 'success'
                 ? 'bg-green-500/20 border-green-500/30 text-green-200'
@@ -3671,14 +3603,14 @@ const LearningManagementSystem = () => {
                   ? 'bg-yellow-500/20 border-yellow-500/30 text-yellow-200'
                   : 'bg-red-500/20 border-red-500/30 text-red-200'
                 }`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-2 sm:space-y-0">
+                  <div className="flex items-start">
                     {emailStatus.type === 'success' ? (
-                      <CheckCircle className="h-4 w-4 mr-2" />
+                      <CheckCircle className="h-4 w-4 mr-2 flex-shrink-0 mt-0.5" />
                     ) : emailStatus.type === 'warning' ? (
-                      <AlertCircle className="h-4 w-4 mr-2" />
+                      <AlertCircle className="h-4 w-4 mr-2 flex-shrink-0 mt-0.5" />
                     ) : (
-                      <X className="h-4 w-4 mr-2" />
+                      <X className="h-4 w-4 mr-2 flex-shrink-0 mt-0.5" />
                     )}
                     <span className="text-sm">{emailStatus.message}</span>
                   </div>
@@ -3686,7 +3618,7 @@ const LearningManagementSystem = () => {
                     <button
                       onClick={() => resendCredentials(showCredentials.userId, emailStatus.email)}
                       disabled={resendingEmail}
-                      className="text-xs underline hover:no-underline disabled:opacity-50"
+                      className="text-xs underline hover:no-underline disabled:opacity-50 whitespace-nowrap"
                     >
                       {resendingEmail ? 'Sending...' : 'Resend'}
                     </button>
@@ -3695,30 +3627,36 @@ const LearningManagementSystem = () => {
               </div>
             )}
 
-            <div className="bg-slate-700/50 p-4 rounded-xl mb-4 border border-white/10">
-              <p className="text-sm text-gray-300 mb-2">Login Credentials:</p>
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Email:</span>
-                  <span className="font-mono text-sm text-white bg-slate-600/50 px-2 py-1 rounded">
-                    {showCredentials.email}
-                  </span>
+            {/* Credentials Display - Mobile Responsive */}
+            <div className="bg-slate-700/50 p-3 sm:p-4 rounded-xl mb-4 border border-white/10">
+              <p className="text-sm text-gray-300 mb-3">Login Credentials:</p>
+              <div className="space-y-3">
+                <div>
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 sm:gap-2">
+                    <span className="text-gray-400 text-sm">Email:</span>
+                    <span className="font-mono text-xs sm:text-sm text-white bg-slate-600/50 px-2 py-1 rounded break-all">
+                      {showCredentials.email}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Password:</span>
-                  <span className="font-mono text-sm text-white bg-slate-600/50 px-2 py-1 rounded">
-                    {showCredentials.password}
-                  </span>
+                <div>
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 sm:gap-2">
+                    <span className="text-gray-400 text-sm">Password:</span>
+                    <span className="font-mono text-xs sm:text-sm text-white bg-slate-600/50 px-2 py-1 rounded">
+                      {showCredentials.password}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
 
+            {/* Security Notice - Mobile Responsive */}
             <div className="bg-yellow-500/20 border border-yellow-500/30 p-3 rounded-xl mb-4">
               <div className="flex items-start">
-                <AlertCircle className="h-4 w-4 text-yellow-400 mr-2 mt-0.5 flex-shrink-0" />
+                <AlertCircle className="h-4 w-4 text-yellow-400 mr-2 flex-shrink-0 mt-0.5" />
                 <div>
                   <p className="text-yellow-200 text-sm font-medium">Security Notice</p>
-                  <p className="text-yellow-200/80 text-xs">
+                  <p className="text-yellow-200/80 text-xs mt-1">
                     {emailStatus?.type === 'success'
                       ? "The user has been emailed their credentials and should change their password after first login."
                       : "Please share these credentials securely with the user and ask them to change their password after first login."
@@ -3728,13 +3666,14 @@ const LearningManagementSystem = () => {
               </div>
             </div>
 
-            <div className="flex space-x-3">
+            {/* Action Buttons - Mobile Responsive */}
+            <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
               <button
                 onClick={() => {
                   setShowCredentials(null);
                   setEmailStatus(null);
                 }}
-                className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white py-2 px-4 rounded-xl hover:from-purple-600 hover:to-pink-600 transition-all"
+                className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white py-2 sm:py-3 px-4 rounded-xl hover:from-purple-600 hover:to-pink-600 transition-all text-sm sm:text-base font-medium"
               >
                 Close
               </button>
@@ -3742,7 +3681,7 @@ const LearningManagementSystem = () => {
                 <button
                   onClick={() => resendCredentials(showCredentials.userId, emailStatus.email)}
                   disabled={resendingEmail}
-                  className="bg-blue-600 text-white py-2 px-4 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center"
+                  className="flex-1 sm:flex-none bg-blue-600 text-white py-2 sm:py-3 px-4 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center justify-center text-sm sm:text-base font-medium"
                 >
                   <Send className="h-3 w-3 mr-1" />
                   {resendingEmail ? 'Sending...' : 'Resend Email'}
@@ -3752,7 +3691,6 @@ const LearningManagementSystem = () => {
           </div>
         </div>
       )}
-
       {/* AI Chat Modal */}
       {aiChatOpen && user.role === "student" && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -3937,7 +3875,7 @@ const LearningManagementSystem = () => {
                             <div>
                               <span className="text-gray-400 text-sm">File: </span>
                               <a
-                                href={`http://localhost:5002/uploads/${submission.submission_file}`}
+                                href={`https://backend.learnanyware.com/uploads/${submission.submission_file}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-purple-400 hover:text-purple-300 text-sm inline-flex items-center"
@@ -4048,50 +3986,108 @@ const LearningManagementSystem = () => {
           </div>
         </div>
       )}
+      {/* Video Playing Overlay - Mobile Responsive with Fullscreen beside Volume Controls */}
       {selectedVideo && (
-        <div className="fixed inset-0 bg-black/95 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-slate-800/95 backdrop-blur-md rounded-2xl w-full max-w-4xl h-[600px] border border-white/20 flex flex-col">
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className={`bg-slate-800/95 backdrop-blur-md rounded-xl sm:rounded-2xl border border-white/20 flex flex-col transition-all duration-300 ${isVideoFullscreen
+            ? 'w-full h-full max-w-none max-h-none rounded-none p-0'
+            : 'w-full max-w-6xl h-full sm:h-auto sm:max-h-[90vh]'
+            }`}>
 
-            {/* Video Header */}
-            <div className="p-4 border-b border-white/10 flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold text-white">
-                  {selectedVideo.video_type === 'youtube' ? '📺' : '🔒'} {selectedVideo.title}
-                </h3>
-                {selectedVideo.description && (
-                  <p className="text-sm text-gray-400">
-                    {selectedVideo.description}
-                  </p>
-                )}
+            {/* Video Header - Mobile Responsive with Fullscreen Toggle (File Videos Only) */}
+            {!isVideoFullscreen && (
+              <div className="p-3 sm:p-4 border-b border-white/10 flex items-center justify-between flex-shrink-0">
+                <div className="flex-1 min-w-0 mr-3">
+                  <h3 className="text-sm sm:text-lg font-semibold text-white truncate">
+                    {selectedVideo.video_type === 'youtube' ? '📺' : '🔒'} {selectedVideo.title}
+                  </h3>
+                  {selectedVideo.description && (
+                    <p className="text-xs sm:text-sm text-gray-400 truncate sm:line-clamp-2">
+                      {selectedVideo.description}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center space-x-2 flex-shrink-0">
+                  {/* Fullscreen Toggle Button - Only for File Videos */}
+                  {selectedVideo.video_type === 'file' && (
+                    <button
+                      onClick={() => setIsVideoFullscreen(true)}
+                      className="text-gray-400 hover:text-white p-1 sm:p-2 rounded-lg hover:bg-white/10 transition-colors"
+                      title="Enter Fullscreen"
+                    >
+                      <svg className="h-4 sm:h-5 w-4 sm:w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                      </svg>
+                    </button>
+                  )}
+                  {/* Close Button */}
+                  <button
+                    onClick={() => {
+                      setSelectedVideo(null);
+                      setSecurityViolations(0);
+                      setIsVideoFullscreen(false);
+                    }}
+                    className="text-gray-400 hover:text-white p-1 sm:p-2 rounded-lg hover:bg-white/10 transition-colors"
+                  >
+                    <X className="h-4 sm:h-5 w-4 sm:w-5" />
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => {
-                  setSelectedVideo(null);
-                  setSecurityViolations(0);
-                }}
-                className="text-gray-400 hover:text-white"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+            )}
 
-            {/* Video Player Container */}
-            <div className="flex-1 p-4">
-              <div className="w-full h-full bg-black rounded-xl overflow-hidden relative">
+            {/* Fullscreen Header - Only visible in fullscreen mode */}
+            {isVideoFullscreen && (
+              <div className="absolute top-0 left-0 right-0 z-30 bg-black/80 backdrop-blur-sm p-2 sm:p-4 flex items-center justify-between opacity-0 hover:opacity-100 transition-opacity duration-300">
+                <div className="flex-1 min-w-0 mr-3">
+                  <h3 className="text-sm sm:text-base font-semibold text-white truncate">
+                    🔒 {selectedVideo.title}
+                  </h3>
+                </div>
+                <div className="flex items-center space-x-2 flex-shrink-0">
+                  {/* Exit Fullscreen Button */}
+                  <button
+                    onClick={() => setIsVideoFullscreen(false)}
+                    className="text-gray-400 hover:text-white p-1 sm:p-2 rounded-lg hover:bg-white/10 transition-colors bg-black/40"
+                    title="Exit Fullscreen"
+                  >
+                    <svg className="h-4 sm:h-5 w-4 sm:w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M15 9h4.5M15 9V4.5M15 9l5.25-5.25M9 15H4.5M9 15v4.5M9 15l-5.25 5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
+                    </svg>
+                  </button>
+                  {/* Close Button */}
+                  <button
+                    onClick={() => {
+                      setSelectedVideo(null);
+                      setSecurityViolations(0);
+                      setIsVideoFullscreen(false);
+                    }}
+                    className="text-gray-400 hover:text-white p-1 sm:p-2 rounded-lg hover:bg-white/10 transition-colors bg-black/40"
+                  >
+                    <X className="h-4 sm:h-5 w-4 sm:w-5" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Video Player Container - Mobile Responsive with Fullscreen Support */}
+            <div className={`flex-1 min-h-0 relative ${isVideoFullscreen ? 'p-0' : 'p-2 sm:p-4'}`}>
+              <div className={`w-full h-full bg-black overflow-hidden relative ${isVideoFullscreen ? 'rounded-none' : 'rounded-lg sm:rounded-xl'}`}>
                 {selectedVideo.video_type === 'youtube' ? (
-                  /* YouTube Player */
-                  <iframe
-                    src={`https://www.youtube.com/embed/${getYouTubeVideoId(selectedVideo.youtube_url)}?rel=0&modestbranding=1&controls=1`}
-                    title={selectedVideo.title}
-                    className="w-full h-full"
-                    frameBorder="0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                  />
+                  /* YouTube Player - Mobile Responsive (No Custom Fullscreen) */
+                  <div className="relative w-full h-full">
+                    <iframe
+                      src={`https://www.youtube.com/embed/${getYouTubeVideoId(selectedVideo.youtube_url)}?rel=0&modestbranding=1&controls=1&fs=1`}
+                      title={selectedVideo.title}
+                      className="w-full h-full"
+                      frameBorder="0"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                      allowFullScreen
+                    />
+                  </div>
                 ) : (
-                  /* Secure File Player */
+                  /* Secure File Player - Mobile Responsive with Fullscreen */
                   <div
-                    className="w-full h-full video-security-container"
+                    className="w-full h-full video-security-container relative"
                     style={{
                       userSelect: 'none',
                       WebkitUserSelect: 'none',
@@ -4106,60 +4102,100 @@ const LearningManagementSystem = () => {
                       showMessage("Right-click detected - Video closed", "error");
                       setSelectedVideo(null);
                       setSecurityViolations(0);
+                      setIsVideoFullscreen(false);
                       return false;
                     }}
                   >
-                    {/* Security Notice for File Videos */}
-                    <div className="absolute top-2 left-2 bg-red-500/20 border border-red-500/50 px-2 py-1 rounded text-xs text-red-300 z-20">
+                    {/* Security Notice for File Videos - Mobile Responsive */}
+                    <div className={`absolute ${isVideoFullscreen ? 'top-2 left-2' : 'top-1 sm:top-2 left-1 sm:left-2'} bg-red-500/20 border border-red-500/50 px-1 sm:px-2 py-0.5 sm:py-1 rounded text-xs text-red-300 z-20`}>
                       🛡️ Protected Content
                     </div>
 
-                    <video
-                      key={selectedVideo.id}
-                      className="w-full h-full object-contain"
-                      controls
-                      controlsList="nodownload nofullscreen noremoteplaybook noplaybackrate"
-                      disablePictureInPicture
-                      disableRemotePlayback
-                      playsInline
-                      onTimeUpdate={(e) => {
-                        if (user?.role === "student") {
-                          updateVideoProgress(
-                            selectedVideo.id,
-                            Math.floor(e.target.currentTime),
-                            Math.floor(e.target.duration)
-                          );
-                        }
-                      }}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        showMessage("Right-click on video detected - Video closed", "error");
-                        setSelectedVideo(null);
-                        setSecurityViolations(0);
-                        return false;
-                      }}
-                      style={{
-                        pointerEvents: 'auto',
-                        userSelect: 'none',
-                        WebkitUserSelect: 'none',
-                        MozUserSelect: 'none',
-                        msUserSelect: 'none'
-                      }}
-                    >
-                      <source
-                        src={`${LMS_API_BASE}/videos/${selectedVideo.id}/stream?token=${localStorage.getItem("token")}`}
-                        type="video/mp4"
-                      />
-                      Your browser does not support the video tag.
-                    </video>
+                    {/* Enhanced Video Element with Custom Controls Positioning */}
+                    <div className="relative w-full h-full">
+                      <video
+                        key={selectedVideo.id}
+                        className="w-full h-full object-contain"
+                        controls
+                        controlsList="nodownload nofullscreen noremoteplaybook noplaybackrate"
+                        disablePictureInPicture
+                        disableRemotePlayback
+                        playsInline
+                        onTimeUpdate={(e) => {
+                          if (user?.role === "student") {
+                            updateVideoProgress(
+                              selectedVideo.id,
+                              Math.floor(e.target.currentTime),
+                              Math.floor(e.target.duration)
+                            );
+                          }
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          showMessage("Right-click on video detected - Video closed", "error");
+                          setSelectedVideo(null);
+                          setSecurityViolations(0);
+                          setIsVideoFullscreen(false);
+                          return false;
+                        }}
+                        style={{
+                          pointerEvents: 'auto',
+                          userSelect: 'none',
+                          WebkitUserSelect: 'none',
+                          MozUserSelect: 'none',
+                          msUserSelect: 'none'
+                        }}
+                      >
+                        <source
+                          src={`${LMS_API_BASE}/videos/${selectedVideo.id}/stream?token=${localStorage.getItem("token")}`}
+                          type="video/mp4"
+                        />
+                        Your browser does not support the video tag.
+                      </video>
 
-                    {/* Watermarks for File Videos */}
+                      {/* Custom Fullscreen Controls Overlay - Positioned beside Volume Controls */}
+                      <div className="absolute bottom-0 left-0 right-0 bg-transparent pointer-events-none z-25">
+                        {/* Fullscreen Button Container - Positioned strategically beside volume */}
+                        <div className="absolute bottom-2 sm:bottom-3 right-12 sm:right-16 flex items-center space-x-1 pointer-events-auto">
+                          {!isVideoFullscreen ? (
+                            /* Enter Fullscreen Button */
+                            <button
+                              onClick={() => setIsVideoFullscreen(true)}
+                              className="bg-black/60 hover:bg-black/80 text-white p-1.5 sm:p-2 mb-5 sm:mb-20 rounded transition-all duration-200 group"
+                              title="Enter Fullscreen"
+                            >
+                              <svg className="h-3 sm:h-4 w-3 sm:w-4 group-hover:scale-110 transition-transform" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
+                              </svg>
+                            </button>
+                          ) : (
+                            /* Exit Fullscreen Button */
+                            <button
+                              onClick={() => setIsVideoFullscreen(false)}
+                              className="bg-black/60 hover:bg-black/80 text-white p-1.5 sm:p-2 mb-7 mr-4 rounded transition-all duration-200 group"
+                              title="Exit Fullscreen"
+                            >
+                              <svg className="h-3 sm:h-4 w-3 sm:w-4 group-hover:scale-110 transition-transform" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Watermarks for File Videos - Mobile Responsive */}
                     <div
-                      className="absolute top-4 right-4 pointer-events-none text-white/40 text-xs font-mono bg-black/30 px-2 py-1 rounded"
+                      className={`absolute ${isVideoFullscreen ? 'top-4 right-4' : 'top-2 sm:top-4 right-2 sm:right-4'} pointer-events-none text-white/40 text-xs font-mono bg-black/30 px-1 sm:px-2 py-0.5 sm:py-1 rounded`}
                       style={{ zIndex: 15 }}
                     >
-                      {user?.name} | {new Date().toLocaleString()}
+                      <span className={isVideoFullscreen ? "inline" : "hidden sm:inline"}>
+                        {user?.name} | {new Date().toLocaleString()}
+                      </span>
+                      <span className={isVideoFullscreen ? "hidden" : "sm:hidden"}>
+                        {user?.name?.split(' ')[0]}
+                      </span>
                     </div>
 
                     <div
@@ -4169,51 +4205,86 @@ const LearningManagementSystem = () => {
                         animation: 'moveWatermark 10s linear infinite'
                       }}
                     >
-                      🔒 Protected Content - {user?.email}
+                      <span className={isVideoFullscreen ? "inline" : "hidden sm:inline"}>
+                        🔒 Protected Content - {user?.email}
+                      </span>
+                      <span className={isVideoFullscreen ? "hidden" : "sm:hidden"}>
+                        🔒 Protected
+                      </span>
                     </div>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Video Info */}
-            <div className="p-4 border-t border-white/10">
-              <div className="flex justify-between items-center text-sm text-gray-400">
-                <span>Added by: {selectedVideo.uploaded_by_name}</span>
-                <span>
-                  {new Date(selectedVideo.created_at).toLocaleDateString()}
-                </span>
+            {/* Video Info - Mobile Responsive (Hidden in fullscreen) */}
+            {!isVideoFullscreen && (
+              <div className="p-3 sm:p-4 border-t border-white/10 flex-shrink-0">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center text-xs sm:text-sm text-gray-400 space-y-2 sm:space-y-0">
+                  <span>Added by: {selectedVideo.uploaded_by_name}</span>
+                  <span>
+                    {new Date(selectedVideo.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+
+                {/* Progress bar only for file videos - Mobile Responsive */}
+                {selectedVideo.video_type === 'file' && user.role === "student" && videoProgress[selectedVideo.id] && (
+                  <div className="mt-3">
+                    <div className="flex justify-between text-xs text-gray-400 mb-1">
+                      <span>Your Progress</span>
+                      <span>
+                        {Math.round((videoProgress[selectedVideo.id].watched_seconds / videoProgress[selectedVideo.id].total_duration) * 100)}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-600 rounded-full h-2">
+                      <div
+                        className="bg-purple-500 h-2 rounded-full transition-all duration-300"
+                        style={{
+                          width: `${Math.round((videoProgress[selectedVideo.id].watched_seconds / videoProgress[selectedVideo.id].total_duration) * 100)}%`
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedVideo.video_type === 'youtube' && (
+                  <div className="mt-2 text-xs text-gray-500">
+                    Note: YouTube videos use built-in fullscreen controls
+                  </div>
+                )}
+
+                {selectedVideo.video_type === 'file' && (
+                  <div className="mt-2 text-xs text-gray-500 flex flex-col sm:flex-row sm:items-center sm:space-x-4 space-y-1 sm:space-y-0">
+                    <span>💡 Fullscreen button located next to volume controls</span>
+                    <span>🔒 Right-click disabled for security</span>
+                  </div>
+                )}
               </div>
+            )}
 
-              {/* Progress bar only for file videos */}
-              {selectedVideo.video_type === 'file' && user.role === "student" && videoProgress[selectedVideo.id] && (
-                <div className="mt-3">
-                  <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Your Progress</span>
-                    <span>
-                      {Math.round((videoProgress[selectedVideo.id].watched_seconds / videoProgress[selectedVideo.id].total_duration) * 100)}%
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-600 rounded-full h-2">
-                    <div
-                      className="bg-purple-500 h-2 rounded-full"
-                      style={{
-                        width: `${Math.round((videoProgress[selectedVideo.id].watched_seconds / videoProgress[selectedVideo.id].total_duration) * 100)}%`
-                      }}
-                    ></div>
-                  </div>
+            {/* Fullscreen Progress Bar - Only visible in fullscreen for file videos */}
+            {isVideoFullscreen && selectedVideo.video_type === 'file' && user.role === "student" && videoProgress[selectedVideo.id] && (
+              <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/80 backdrop-blur-sm p-2 sm:p-4 opacity-0 hover:opacity-100 transition-opacity duration-300">
+                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                  <span>Your Progress</span>
+                  <span>
+                    {Math.round((videoProgress[selectedVideo.id].watched_seconds / videoProgress[selectedVideo.id].total_duration) * 100)}%
+                  </span>
                 </div>
-              )}
-
-              {selectedVideo.video_type === 'youtube' && (
-                <div className="mt-2 text-xs text-gray-500">
-                  Note: YouTube videos are played through YouTube's secure player
+                <div className="w-full bg-slate-600 rounded-full h-1 sm:h-2">
+                  <div
+                    className="bg-purple-500 h-1 sm:h-2 rounded-full transition-all duration-300"
+                    style={{
+                      width: `${Math.round((videoProgress[selectedVideo.id].watched_seconds / videoProgress[selectedVideo.id].total_duration) * 100)}%`
+                    }}
+                  ></div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       )}
+
 
       <div className="flex">
         {/* Sidebar */}
@@ -4772,7 +4843,7 @@ const LearningManagementSystem = () => {
                     </div>
 
                     <a
-                      href={`http://localhost:5002/receipts/${receipt.receipt_path}`}
+                      href={`https://backend.learnanyware.com/receipts/${receipt.receipt_path}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white py-2 px-4 rounded-xl hover:from-blue-600 hover:to-purple-600 transition-all duration-200 flex items-center justify-center"
@@ -4986,25 +5057,7 @@ const LearningManagementSystem = () => {
                   </form>
                 </div>
               ) : (
-                /* Enhanced Blog List - With Read More/Less */
-                // <div className="space-y-6">
-                //   <div className="grid grid-cols-1 gap-6">
-                //     {blogs.map((blog) => {
-                //       const isLongContent = blog.content.length > 500;
-                //       const blogKey = `blog-${blog.id}`;
 
-                //       return (
-                //         <BlogPostCard
-                //           key={blog.id}
-                //           blog={blog}
-                //           user={user}
-                //           isLongContent={isLongContent}
-                //           onEdit={startEditingBlog}
-                //           onDelete={deleteBlog}
-                //         />
-                //       );
-                //     })}
-                //   </div>
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 gap-6">
                     {blogs.map((blog, index) => (
@@ -5346,196 +5399,6 @@ const LearningManagementSystem = () => {
                 </form>
               </div>
 
-              {/* ADD THIS NEW EMAIL COMPONENT */}
-              {user.role === 'admin' && (
-                <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-                  <h3 className="text-lg font-semibold text-white mb-4">Email Configuration</h3>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Test Email Configuration
-                      </label>
-                      <div className="flex space-x-2">
-                        <input
-                          type="email"
-                          placeholder="Enter test email address"
-                          className="flex-1 px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
-                          id="testEmail"
-                        />
-                        <button
-                          onClick={() => {
-                            const email = document.getElementById('testEmail').value;
-                            if (email) testEmailConfiguration(email);
-                          }}
-                          disabled={loading}
-                          className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-6 py-3 rounded-xl hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 transition-all duration-200 flex items-center"
-                        >
-                          <Send className="h-4 w-4 mr-2" />
-                          {loading ? 'Testing...' : 'Test'}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
-                      <h4 className="text-sm font-medium text-white mb-2">Email Features</h4>
-                      <ul className="text-sm text-gray-300 space-y-1">
-                        <li>✅ Welcome emails for new users</li>
-                        <li>✅ Automatic credential delivery</li>
-                        <li>✅ Professional HTML templates</li>
-                        <li>✅ Resend functionality</li>
-                        <li>✅ Mobile-responsive design</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              )}
-              {/* Add this to your admin settings section */}
-              {user.role === "admin" && (
-                <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-                  <h3 className="text-lg font-semibold text-white mb-4">
-                    Google AdSense Management
-                  </h3>
-
-                  <div className="space-y-6">
-                    {/* Current Status */}
-                    <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
-                      <h4 className="text-sm font-medium text-white mb-3">Current Status</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                        <div className="flex items-center justify-between p-2 bg-slate-600/30 rounded-lg">
-                          <span className="text-gray-300">Status:</span>
-                          <span className={`font-medium ${adsConfig.enabled ? 'text-green-300' : 'text-red-300'}`}>
-                            {adsConfig.enabled ? '✅ Enabled' : '❌ Disabled'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between p-2 bg-slate-600/30 rounded-lg">
-                          <span className="text-gray-300">Mode:</span>
-                          <span className={`font-medium ${adsConfig.testMode ? 'text-yellow-300' : 'text-blue-300'}`}>
-                            {adsConfig.testMode ? '🧪 Test' : '🟢 Live'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between p-2 bg-slate-600/30 rounded-lg">
-                          <span className="text-gray-300">Client ID:</span>
-                          <span className="font-medium text-white text-xs">
-                            {adsConfig.clientId ? `${adsConfig.clientId.substring(0, 15)}...` : 'Not Set'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Controls */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Enable/Disable Toggle */}
-                      <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
-                        <div className="flex items-center justify-between mb-3">
-                          <div>
-                            <label className="text-sm font-medium text-gray-300">
-                              Advertisement Display
-                            </label>
-                            <p className="text-xs text-gray-500">
-                              {adsConfig.enabled ? 'Ads are currently visible to users' : 'Ads are hidden from all users'}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => updateAdsenseSettings(!adsConfig.enabled, adsConfig.testMode, adsConfig.clientId)}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adsConfig.enabled ? 'bg-green-600' : 'bg-gray-600'}`}
-                          >
-                            <span
-                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adsConfig.enabled ? 'translate-x-6' : 'translate-x-1'}`}
-                            />
-                          </button>
-                        </div>
-
-                        {adsConfig.enabled && (
-                          <div className="text-xs text-green-300 bg-green-500/10 p-2 rounded border border-green-500/20">
-                            ✅ Ads are live and visible to users
-                          </div>
-                        )}
-
-                        {!adsConfig.enabled && (
-                          <div className="text-xs text-red-300 bg-red-500/10 p-2 rounded border border-red-500/20">
-                            ❌ Ads are disabled and hidden from users
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Test Mode Toggle */}
-                      <div className="bg-slate-700/30 p-4 rounded-xl border border-white/10">
-                        <div className="flex items-center justify-between mb-3">
-                          <div>
-                            <label className="text-sm font-medium text-gray-300">
-                              Test Mode
-                            </label>
-                            <p className="text-xs text-gray-500">
-                              {adsConfig.testMode ? 'Showing test ads' : 'Showing live ads'}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => updateAdsenseSettings(adsConfig.enabled, !adsConfig.testMode, adsConfig.clientId)}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${adsConfig.testMode ? 'bg-yellow-600' : 'bg-blue-600'}`}
-                          >
-                            <span
-                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${adsConfig.testMode ? 'translate-x-6' : 'translate-x-1'}`}
-                            />
-                          </button>
-                        </div>
-
-                        {adsConfig.testMode && (
-                          <div className="text-xs text-yellow-300 bg-yellow-500/10 p-2 rounded border border-yellow-500/20">
-                            🧪 Test mode - showing test ads
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      <button
-                        onClick={testAdsenseConfiguration}
-                        disabled={!adsConfig.enabled}
-                        className="flex-1 bg-blue-600 text-white px-4 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-                      >
-                        <CheckCircle className="h-4 w-4 mr-2" />
-                        Test Configuration
-                      </button>
-
-                      <button
-                        onClick={fetchAdsenseConfig}
-                        className="flex-1 bg-slate-600 text-white px-4 py-3 rounded-xl hover:bg-slate-700 transition-colors flex items-center justify-center"
-                      >
-                        <Settings className="h-4 w-4 mr-2" />
-                        Refresh Config
-                      </button>
-                    </div>
-
-                    {/* Instructions */}
-                    <div className="bg-slate-700/20 p-4 rounded-xl border border-white/10">
-                      <h4 className="text-sm font-medium text-white mb-2">Setup Instructions</h4>
-                      <ul className="text-xs text-gray-400 space-y-1">
-                        <li>• Replace the client ID in the code with your actual Google AdSense publisher ID</li>
-                        <li>• Add your domain to your AdSense account settings</li>
-                        <li>• Enable ads using the toggle above to make them visible to users</li>
-                        <li>• Use test mode during development to avoid policy violations</li>
-                        <li>• Allow 24-48 hours for ads to start appearing consistently</li>
-                        <li>• Monitor performance in your Google AdSense dashboard</li>
-                      </ul>
-                    </div>
-
-                    {/* Debug Info (only in development) */}
-                    {process.env.NODE_ENV === 'development' && (
-                      <div className="bg-slate-700/20 p-4 rounded-xl border border-white/10">
-                        <h4 className="text-sm font-medium text-white mb-2">Debug Information</h4>
-                        <div className="text-xs text-gray-400 space-y-1">
-                          <div>Manager Status: {adsenseManager.isEnabled() ? 'Enabled' : 'Disabled'}</div>
-                          <div>Script Loaded: {adsenseManager.isScriptLoaded() ? 'Yes' : 'No'}</div>
-                          <div>Should Show Ads: {adsenseManager.shouldShowAds() ? 'Yes' : 'No'}</div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
               {/* System Information */}
               <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
                 <h3 className="text-lg font-semibold text-white mb-4">
@@ -5573,21 +5436,23 @@ const LearningManagementSystem = () => {
           )}
 
           {/* Admin Teachers Section */}
+          {/* Admin Teachers Section - Mobile Responsive */}
           {activeSection === "teachers" && user.role === "admin" && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-white">
+            <div className="space-y-4 sm:space-y-6">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                <h2 className="text-xl sm:text-2xl font-bold text-white">
                   Teacher Management
                 </h2>
               </div>
 
-              {/* Create Teacher Form */}
-              <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-                <h3 className="text-lg font-semibold text-white mb-4">
+              {/* Create Teacher Form - Mobile Responsive */}
+              <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/10">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                  <UserPlus className="h-5 w-5 mr-2 flex-shrink-0" />
                   Create New Teacher
                 </h3>
                 <form onSubmit={createTeacher} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-300 mb-2">
                         Name
@@ -5602,7 +5467,7 @@ const LearningManagementSystem = () => {
                             name: e.target.value,
                           })
                         }
-                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm sm:text-base"
                         placeholder="Teacher's full name"
                       />
                     </div>
@@ -5620,7 +5485,7 @@ const LearningManagementSystem = () => {
                             email: e.target.value,
                           })
                         }
-                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm sm:text-base"
                         placeholder="teacher@example.com"
                       />
                     </div>
@@ -5628,7 +5493,7 @@ const LearningManagementSystem = () => {
                   <button
                     type="submit"
                     disabled={loading}
-                    className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                    className="w-full sm:w-auto bg-gradient-to-r from-green-500 to-emerald-500 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center justify-center text-sm sm:text-base font-medium"
                   >
                     <UserPlus className="h-4 w-4 mr-2" />
                     {loading ? "Creating..." : "Create Teacher"}
@@ -5636,15 +5501,15 @@ const LearningManagementSystem = () => {
                 </form>
               </div>
 
-              {/* Teachers List */}
-              <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-                <div className="flex justify-between items-center mb-4">
+              {/* Teachers List - Mobile Responsive */}
+              <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/10">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 sm:gap-4 mb-4">
                   <h3 className="text-lg font-semibold text-white">Teachers</h3>
                   {user.role === "admin" && (
                     <button
                       onClick={testEmailConfiguration}
                       disabled={loading}
-                      className="bg-blue-600/80 text-white px-3 py-1 rounded-lg hover:bg-blue-700 transition-colors text-sm flex items-center"
+                      className="w-full sm:w-auto bg-blue-600/80 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm flex items-center justify-center"
                     >
                       <Send className="h-3 w-3 mr-1" />
                       Test Email
@@ -5652,20 +5517,24 @@ const LearningManagementSystem = () => {
                   )}
                 </div>
 
-                <div className="space-y-4">
+                <div className="space-y-3 sm:space-y-4">
                   {teachers.map((teacher) => (
                     <div
                       key={teacher.id}
-                      className="flex items-center justify-between p-4 bg-slate-700/30 rounded-xl border border-white/10"
+                      className="flex flex-col lg:flex-row lg:items-center lg:justify-between p-3 sm:p-4 bg-slate-700/30 rounded-xl border border-white/10 space-y-3 lg:space-y-0"
                     >
-                      <div className="flex items-center space-x-4">
-                        <div className="h-12 w-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-xl flex items-center justify-center">
-                          <User className="h-6 w-6 text-white" />
+                      <div className="flex items-start space-x-3 sm:space-x-4 flex-1 min-w-0">
+                        <div className="h-10 w-10 sm:h-12 sm:w-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-xl flex items-center justify-center flex-shrink-0">
+                          <User className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
                         </div>
-                        <div>
-                          <h4 className="font-medium text-white">{teacher.name}</h4>
-                          <p className="text-sm text-gray-400">{teacher.email}</p>
-                          <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-white text-sm sm:text-base">
+                            {teacher.name}
+                          </h4>
+                          <p className="text-xs sm:text-sm text-gray-400 break-all">
+                            {teacher.email}
+                          </p>
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 mt-1 text-xs sm:text-sm text-gray-500 space-y-1 sm:space-y-0">
                             <span>Courses: {teacher.course_count || 0}</span>
                             <span>Created: {new Date(teacher.created_at).toLocaleDateString()}</span>
                             <span className={`px-2 py-1 rounded-full text-xs ${teacher.status === "active"
@@ -5677,55 +5546,62 @@ const LearningManagementSystem = () => {
                           </div>
                         </div>
                       </div>
-                      <div className="flex space-x-2">
-                        {/* ADD THIS NEW RESEND BUTTON */}
+
+                      {/* Action Buttons - Mobile Responsive */}
+                      <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 lg:ml-4">
+                        {/* Resend Button */}
                         <button
                           onClick={() => resendCredentials(teacher.id, teacher.email)}
                           disabled={resendingEmail}
-                          className="bg-blue-600/80 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm flex items-center"
+                          className="w-full sm:w-auto bg-blue-600/80 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors text-xs sm:text-sm flex items-center justify-center"
                           title="Resend login credentials"
                         >
                           <Send className="h-3 w-3 mr-1" />
                           Resend
                         </button>
-                        {/* Keep your existing buttons */}
+
+                        {/* Toggle Status Button */}
                         <button
                           onClick={() => toggleTeacherStatus(teacher.id)}
                           disabled={loading}
-                          className={`px-4 py-2 rounded-xl transition-all duration-200 flex items-center ${teacher.status === "active"
+                          className={`w-full sm:w-auto px-3 sm:px-4 py-2 rounded-xl transition-all duration-200 flex items-center justify-center text-xs sm:text-sm ${teacher.status === "active"
                             ? "bg-red-500/80 text-white hover:bg-red-600"
                             : "bg-green-500/80 text-white hover:bg-green-600"
                             }`}
                         >
                           {teacher.status === "active" ? (
                             <>
-                              <Lock className="h-4 w-4 mr-1" />
+                              <Lock className="h-3 sm:h-4 w-3 sm:w-4 mr-1" />
                               Block
                             </>
                           ) : (
                             <>
-                              <Unlock className="h-4 w-4 mr-1" />
+                              <Unlock className="h-3 sm:h-4 w-3 sm:w-4 mr-1" />
                               Unblock
                             </>
                           )}
                         </button>
+
+                        {/* Delete Button */}
                         <button
                           onClick={() => deleteTeacher(teacher.id)}
                           disabled={loading}
-                          className="bg-red-600/80 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-all duration-200 flex items-center"
+                          className="w-full sm:w-auto bg-red-600/80 text-white px-3 sm:px-4 py-2 rounded-xl hover:bg-red-700 transition-all duration-200 flex items-center justify-center text-xs sm:text-sm"
                         >
-                          <Trash2 className="h-4 w-4 mr-1" />
+                          <Trash2 className="h-3 sm:h-4 w-3 sm:w-4 mr-1" />
                           Delete
                         </button>
                       </div>
                     </div>
                   ))}
+
+                  {/* Empty State - Mobile Responsive */}
                   {teachers.length === 0 && (
-                    <div className="text-center py-8">
-                      <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                        <Users className="h-8 w-8 text-gray-400" />
+                    <div className="text-center py-8 sm:py-12">
+                      <div className="h-12 sm:h-16 w-12 sm:w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                        <Users className="h-6 sm:h-8 w-6 sm:w-8 text-gray-400" />
                       </div>
-                      <p className="text-gray-400">No teachers created yet.</p>
+                      <p className="text-gray-400 text-sm sm:text-base">No teachers created yet.</p>
                     </div>
                   )}
                 </div>
@@ -5734,22 +5610,23 @@ const LearningManagementSystem = () => {
           )}
 
           {/* Teacher Students Section */}
+          {/* Teacher Students Section - Mobile Responsive */}
           {activeSection === "students" && user.role === "teacher" && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-white">
+            <div className="space-y-4 sm:space-y-6">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                <h2 className="text-xl sm:text-2xl font-bold text-white">
                   Student Management
                 </h2>
               </div>
 
-              {/* Create Student Form */}
-              {/* Updated Create Student Form in Students Section */}
-              <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-                <h3 className="text-lg font-semibold text-white mb-4">
+              {/* Create Student Form - Mobile Responsive */}
+              <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/10">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                  <UserPlus className="h-5 w-5 mr-2 flex-shrink-0" />
                   Create New Student
                 </h3>
                 <form onSubmit={createStudent} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-300 mb-2">
                         Name
@@ -5764,7 +5641,7 @@ const LearningManagementSystem = () => {
                             name: e.target.value,
                           })
                         }
-                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm sm:text-base"
                         placeholder="Student's full name"
                       />
                     </div>
@@ -5782,7 +5659,7 @@ const LearningManagementSystem = () => {
                             email: e.target.value,
                           })
                         }
-                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                        className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm sm:text-base"
                         placeholder="student@example.com"
                       />
                     </div>
@@ -5800,7 +5677,7 @@ const LearningManagementSystem = () => {
                           mobile: e.target.value,
                         })
                       }
-                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                      className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm sm:text-base"
                       placeholder="+91 9876543210 or 10-digit number"
                     />
                     <p className="text-xs text-gray-400 mt-1">
@@ -5810,7 +5687,7 @@ const LearningManagementSystem = () => {
                   <button
                     type="submit"
                     disabled={loading}
-                    className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                    className="w-full sm:w-auto bg-gradient-to-r from-green-500 to-emerald-500 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center justify-center text-sm sm:text-base font-medium"
                   >
                     <UserPlus className="h-4 w-4 mr-2" />
                     {loading ? "Creating..." : "Create Student"}
@@ -5818,42 +5695,40 @@ const LearningManagementSystem = () => {
                 </form>
               </div>
 
-              {/* Students List */}
-              <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
+              {/* Students List - Mobile Responsive */}
+              <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/10">
                 <h3 className="text-lg font-semibold text-white mb-4">
                   My Students
                 </h3>
-                <div className="space-y-4">
+                <div className="space-y-3 sm:space-y-4">
                   {students.map((student) => (
                     <div
                       key={student.id}
-                      className="flex items-center justify-between p-4 bg-slate-700/30 rounded-xl border border-white/10"
+                      className="flex flex-col lg:flex-row lg:items-center lg:justify-between p-3 sm:p-4 bg-slate-700/30 rounded-xl border border-white/10 space-y-3 lg:space-y-0"
                     >
-                      <div className="flex items-center space-x-4">
-                        <div className="h-12 w-12 bg-gradient-to-r from-green-400 to-blue-400 rounded-xl flex items-center justify-center">
-                          <GraduationCap className="h-6 w-6 text-white" />
+                      <div className="flex items-start space-x-3 sm:space-x-4 flex-1 min-w-0">
+                        <div className="h-10 w-10 sm:h-12 sm:w-12 bg-gradient-to-r from-green-400 to-blue-400 rounded-xl flex items-center justify-center flex-shrink-0">
+                          <GraduationCap className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
                         </div>
-                        <div>
-                          <h4 className="font-medium text-white">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-white text-sm sm:text-base">
                             {student.name}
                           </h4>
-                          <p className="text-sm text-gray-400">
+                          <p className="text-xs sm:text-sm text-gray-400 break-all">
                             {student.email}
                           </p>
                           {student.mobile && (
-                            <p className="text-sm text-gray-400">
+                            <p className="text-xs sm:text-sm text-gray-400">
                               📱 {student.mobile}
                             </p>
                           )}
-                          <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 mt-1 text-xs sm:text-sm text-gray-500 space-y-1 sm:space-y-0">
                             <span>
                               Enrolled Courses: {student.enrolled_courses || 0}
                             </span>
                             <span>
                               Created:{" "}
-                              {new Date(
-                                student.created_at
-                              ).toLocaleDateString()}
+                              {new Date(student.created_at).toLocaleDateString()}
                             </span>
                           </div>
                         </div>
@@ -5861,19 +5736,19 @@ const LearningManagementSystem = () => {
                       <button
                         onClick={() => deleteStudent(student.id)}
                         disabled={loading}
-                        className="bg-red-600/80 text-white px-4 py-2 rounded-xl hover:bg-red-700 disabled:opacity-50 transition-all duration-200 flex items-center"
+                        className="w-full lg:w-auto bg-red-600/80 text-white px-3 sm:px-4 py-2 rounded-xl hover:bg-red-700 disabled:opacity-50 transition-all duration-200 flex items-center justify-center text-xs sm:text-sm font-medium"
                       >
-                        <Trash2 className="h-4 w-4 mr-1" />
+                        <Trash2 className="h-3 sm:h-4 w-3 sm:w-4 mr-1 sm:mr-2" />
                         Delete
                       </button>
                     </div>
                   ))}
                   {students.length === 0 && (
-                    <div className="text-center py-8">
-                      <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                        <GraduationCap className="h-8 w-8 text-gray-400" />
+                    <div className="text-center py-8 sm:py-12">
+                      <div className="h-12 sm:h-16 w-12 sm:w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                        <GraduationCap className="h-6 sm:h-8 w-6 sm:w-8 text-gray-400" />
                       </div>
-                      <p className="text-gray-400">No students created yet.</p>
+                      <p className="text-gray-400 text-sm sm:text-base">No students created yet.</p>
                     </div>
                   )}
                 </div>
@@ -6113,7 +5988,7 @@ const LearningManagementSystem = () => {
 
                       <div className="flex space-x-2">
                         <a
-                          href={`http://localhost:5002/receipts/${receipt.receipt_path}`}
+                          href={`https://backend.learnanyware.com/receipts/${receipt.receipt_path}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex-1 bg-gradient-to-r from-blue-500 to-purple-500 text-white py-2 px-3 rounded-lg hover:from-blue-600 hover:to-purple-600 transition-all duration-200 flex items-center justify-center text-sm"
@@ -6122,7 +5997,7 @@ const LearningManagementSystem = () => {
                           Download
                         </a>
                         <a
-                          href={`http://localhost:5002/receipts/${receipt.receipt_path}`}
+                          href={`https://backend.learnanyware.com/receipts/${receipt.receipt_path}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="bg-slate-600 text-white py-2 px-3 rounded-lg hover:bg-slate-700 transition-all duration-200 flex items-center justify-center"
@@ -6315,7 +6190,7 @@ const LearningManagementSystem = () => {
                     </div>
 
                     <a
-                      href={`http://localhost:5002/certificates/${cert.certificate_path}`}
+                      href={`https://backend.learnanyware.com/certificates/${cert.certificate_path}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="w-full bg-gradient-to-r from-yellow-500 to-orange-500 text-white py-3 px-4 rounded-xl hover:from-yellow-600 hover:to-orange-600 transition-all duration-200 flex items-center justify-center font-medium"
@@ -6619,14 +6494,14 @@ const LearningManagementSystem = () => {
               ) : selectedCourse ? (
                 /* Enhanced Course Details with Group Link Management */
                 <div className="space-y-6">
-                  {/* Course Header with Group Link */}
-                  <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <h2 className="text-2xl font-bold text-white">
+                  {/* Course Header with Group Link - Mobile Responsive */}
+                  <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/10">
+                    <div className="flex flex-col lg:flex-row lg:justify-between lg:items-start space-y-4 lg:space-y-0">
+                      <div className="flex-1 min-w-0">
+                        <h2 className="text-xl sm:text-2xl font-bold text-white break-words">
                           {selectedCourse.title}
                         </h2>
-                        <p className="text-gray-300 mt-2">
+                        <p className="text-gray-300 mt-2 text-sm sm:text-base">
                           {selectedCourse.description}
                         </p>
                         {user.role === "teacher" && (
@@ -6635,17 +6510,17 @@ const LearningManagementSystem = () => {
                           </p>
                         )}
 
-                        {/* Group Link Display for Students */}
+                        {/* Group Link Display for Students - Mobile Responsive */}
                         {user.role === "student" && courseGroupLink && (
-                          <div className="mt-4 p-4 bg-gradient-to-r from-green-500/20 to-blue-500/20 rounded-xl border border-green-500/30">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <h3 className="text-green-300 font-medium">Join Study Group</h3>
-                                <p className="text-green-200/80 text-sm">Connect with your classmates</p>
+                          <div className="mt-4 p-3 sm:p-4 bg-gradient-to-r from-green-500/20 to-blue-500/20 rounded-xl border border-green-500/30">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-3 sm:space-y-0">
+                              <div className="min-w-0 flex-1">
+                                <h3 className="text-green-300 font-medium text-sm sm:text-base">Join Study Group</h3>
+                                <p className="text-green-200/80 text-xs sm:text-sm">Connect with your classmates</p>
                               </div>
                               <button
                                 onClick={() => joinGroup(selectedCourse.id, courseGroupLink)}
-                                className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-4 py-2 rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all duration-200 flex items-center"
+                                className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-4 py-2 rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all duration-200 flex items-center justify-center sm:justify-start whitespace-nowrap text-sm sm:text-base"
                               >
                                 <Users className="h-4 w-4 mr-2" />
                                 Join Group
@@ -6654,54 +6529,59 @@ const LearningManagementSystem = () => {
                           </div>
                         )}
 
-                        {/* No Group Link Message for Students */}
+                        {/* No Group Link Message for Students - Mobile Responsive */}
                         {user.role === "student" && !courseGroupLink && (
-                          <div className="mt-4 p-4 bg-slate-700/30 rounded-xl border border-white/10">
-                            <div className="flex items-center">
-                              <Users className="h-4 w-4 text-gray-400 mr-2" />
-                              <p className="text-gray-400 text-sm">No study group available for this course yet.</p>
+                          <div className="mt-4 p-3 sm:p-4 bg-slate-700/30 rounded-xl border border-white/10">
+                            <div className="flex items-start space-x-2">
+                              <Users className="h-4 w-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                              <p className="text-gray-400 text-xs sm:text-sm">No study group available for this course yet.</p>
                             </div>
                           </div>
                         )}
                       </div>
 
-                      <div className="flex space-x-2 ml-4">
+                      {/* Action Buttons - Mobile Responsive */}
+                      <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 lg:ml-4 w-full sm:w-auto">
                         {user.role === "teacher" && (
                           <>
                             <button
                               onClick={() => startEditingCourse(selectedCourse)}
-                              className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors flex items-center"
+                              className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors flex items-center justify-center text-sm sm:text-base"
                             >
-                              <Edit className="h-4 w-4 mr-1" />
+                              <Edit className="h-4 w-4 mr-2" />
                               Edit
                             </button>
                             <button
                               onClick={() => deleteCourse(selectedCourse.id)}
-                              className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-colors flex items-center"
+                              className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center text-sm sm:text-base"
                             >
-                              <Trash2 className="h-4 w-4 mr-1" />
+                              <Trash2 className="h-4 w-4 mr-2" />
                               Delete
                             </button>
                           </>
                         )}
                         <button
                           onClick={() => setSelectedCourse(null)}
-                          className="bg-slate-600 text-white px-4 py-2 rounded-xl hover:bg-slate-700 transition-colors"
+                          className="bg-slate-600 text-white px-4 py-2 rounded-xl hover:bg-slate-700 transition-colors flex items-center justify-center text-sm sm:text-base"
                         >
-                          Back to Courses
+                          <ChevronLeft className="h-4 w-4 mr-2" />
+                          <span className="hidden sm:inline">Back to Courses</span>
+                          <span className="sm:hidden">Back</span>
                         </button>
                       </div>
                     </div>
                   </div>
 
-                  {/* Enhanced Tabs with Overview */}
+
+                  {/* Enhanced Tabs with Overview - Mobile Responsive */}
                   <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl border border-white/10">
                     <div className="border-b border-white/10">
-                      <nav className="flex space-x-8 px-6">
+                      {/* Desktop Navigation */}
+                      <nav className="hidden md:flex space-x-8 px-6">
                         {[
                           "overview",
                           "sessions",
-                          "videos", // Add this line
+                          "videos",
                           "assignments",
                           "queries",
                           user.role === "teacher" ? "students" : "project",
@@ -6723,6 +6603,55 @@ const LearningManagementSystem = () => {
                             </button>
                           ))}
                       </nav>
+
+                      {/* Mobile Dropdown Navigation */}
+                      <div className="md:hidden px-6 py-4">
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowMobileTabMenu(!showMobileTabMenu)}
+                            className="w-full flex items-center justify-between px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                          >
+                            <span className="capitalize">
+                              {activeTab === "subteachers" ? "Sub Teachers" : activeTab}
+                            </span>
+                            <div className={`transform transition-transform ${showMobileTabMenu ? 'rotate-180' : ''}`}>
+                              <ChevronRight className="h-4 w-4" />
+                            </div>
+                          </button>
+
+                          {showMobileTabMenu && (
+                            <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800 border border-white/20 rounded-xl shadow-lg z-10 max-h-64 overflow-y-auto">
+                              {[
+                                "overview",
+                                "sessions",
+                                "videos",
+                                "assignments",
+                                "queries",
+                                user.role === "teacher" ? "students" : "project",
+                                user.role === "teacher" ? "projects" : null,
+                                user.role === "teacher" ? "attendance" : null,
+                                user.role === "teacher" ? "subteachers" : null,
+                              ]
+                                .filter(Boolean)
+                                .map((tab) => (
+                                  <button
+                                    key={tab}
+                                    onClick={() => {
+                                      setActiveTab(tab);
+                                      setShowMobileTabMenu(false);
+                                    }}
+                                    className={`w-full text-left px-4 py-3 text-sm capitalize transition-colors border-b border-white/10 last:border-b-0 ${activeTab === tab
+                                      ? "bg-purple-500/20 text-purple-300"
+                                      : "text-gray-300 hover:bg-slate-700/50 hover:text-white"
+                                      }`}
+                                  >
+                                    {tab === "subteachers" ? "Sub Teachers" : tab}
+                                  </button>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     <div className="p-6">
@@ -6779,7 +6708,7 @@ const LearningManagementSystem = () => {
                                 <label className="block text-sm font-medium text-gray-300 mb-2">
                                   Add/Update Group Link
                                 </label>
-                                <div className="flex space-x-2">
+                                <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
                                   <input
                                     type="url"
                                     value={groupLinkForm}
@@ -6790,7 +6719,7 @@ const LearningManagementSystem = () => {
                                   <button
                                     onClick={() => updateGroupLink(selectedCourse.id, groupLinkForm)}
                                     disabled={groupLinkLoading || !groupLinkForm.trim()}
-                                    className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                    className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center justify-center sm:justify-start whitespace-nowrap"
                                   >
                                     <Users className="h-4 w-4 mr-2" />
                                     {groupLinkLoading ? "Updating..." : "Update"}
@@ -7171,7 +7100,7 @@ const LearningManagementSystem = () => {
                                       )}
                                       {session.notes_file && (
                                         <a
-                                          href={`http://localhost:5002/uploads/${session.notes_file}`}
+                                          href={`https://backend.learnanyware.com/uploads/${session.notes_file}`}
                                           target="_blank"
                                           rel="noopener noreferrer"
                                           className="inline-flex items-center text-sm text-purple-400 hover:text-purple-300 mt-2"
@@ -7255,115 +7184,387 @@ const LearningManagementSystem = () => {
                         </div>
                       )}
 
-                      {/* Students Tab for Teachers */}
+                      {/* Students Tab for Teachers - Mobile Responsive */}
                       {activeTab === "students" && user.role === "teacher" && (
-                        <div className="space-y-6">
-                          {/* Updated Add Student Form */}
-                          <div className="border-b border-white/10 pb-6">
-                            <h3 className="text-lg font-semibold text-white mb-4">
+                        <div className="space-y-4 sm:space-y-6">
+                          {/* Add Student Form - Mobile Responsive */}
+                          <div className="border-b border-white/10 pb-4 sm:pb-6">
+                            <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                              <UserPlus className="h-5 w-5 mr-2 flex-shrink-0" />
                               Add Student to Course
                             </h3>
-                            <form onSubmit={addStudent} className="flex space-x-3">
-                              <StudentSearchInput
-                                value={studentEmail}
-                                onChange={(value) => {
-                                  setStudentEmail(value);
-                                  setStudentSearchValue(value);
-                                }}
-                                onSelect={handleStudentSelect}
-                                placeholder="Search and select student by name or email"
-                                courseId={selectedCourse.id}
-                              />
+                            <form onSubmit={addStudent} className="space-y-3 sm:space-y-0 sm:flex sm:space-x-3">
+                              <div className="flex-1">
+                                <StudentSearchInput
+                                  value={studentEmail}
+                                  onChange={(value) => {
+                                    setStudentEmail(value);
+                                    setStudentSearchValue(value);
+                                  }}
+                                  onSelect={handleStudentSelect}
+                                  placeholder="Search by name, email, or mobile number"
+                                  courseId={selectedCourse.id}
+                                />
+                              </div>
                               <button
                                 type="submit"
-                                disabled={loading}
-                                className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center whitespace-nowrap"
+                                disabled={loading || !studentEmail.trim()}
+                                className="w-full sm:w-auto bg-gradient-to-r from-green-500 to-emerald-500 text-white px-4 sm:px-6 py-3 rounded-xl hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 transition-all duration-200 flex items-center justify-center text-sm sm:text-base font-medium"
                               >
                                 <Users className="h-4 w-4 mr-2" />
-                                Add Student
+                                {loading ? "Adding..." : "Add Student"}
                               </button>
                             </form>
                           </div>
 
-                          {/* Students List */}
-                          {/* Enhanced Students List */}
+                          {/* Students List - Mobile Responsive */}
+                          {/* Students List - Enhanced Mobile Responsive */}
                           <div>
-                            <h3 className="text-lg font-semibold text-white mb-4">
-                              Enrolled Students ({students.length})
-                            </h3>
-                            <div className="space-y-3">
-                              {students.map((student) => (
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-4">
+                              <h3 className="text-lg font-semibold text-white">
+                                Enrolled Students ({students.length})
+                              </h3>
+
+                              {/* Mobile Search Bar */}
+                              <div className="sm:hidden">
+                                <input
+                                  type="text"
+                                  placeholder="Search students..."
+                                  value={studentSearchFilter}
+                                  onChange={(e) => setStudentSearchFilter(e.target.value)}
+                                  className="w-full px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm"
+                                />
+                              </div>
+
+                              {/* Student Stats and Desktop Search */}
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                                {/* Desktop Search */}
+                                <div className="hidden sm:block">
+                                  <input
+                                    type="text"
+                                    placeholder="Search students..."
+                                    value={studentSearchFilter}
+                                    onChange={(e) => setStudentSearchFilter(e.target.value)}
+                                    className="px-3 py-2 bg-slate-700/50 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm w-48"
+                                  />
+                                </div>
+
+                                {/* Student Stats */}
+                                {students.length > 0 && (
+                                  <div className="flex flex-wrap gap-2 text-xs">
+                                    <div className="bg-blue-500/20 text-blue-300 px-2 py-1 rounded-full border border-blue-500/30 whitespace-nowrap">
+                                      Active: {filteredStudents.filter(s => !s.completed_at).length}
+                                    </div>
+                                    <div className="bg-green-500/20 text-green-300 px-2 py-1 rounded-full border border-green-500/30 whitespace-nowrap">
+                                      Completed: {filteredStudents.filter(s => s.completed_at).length}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Mobile View Toggle */}
+                            <div className="sm:hidden mb-4 flex items-center justify-between">
+                              <div className="flex bg-slate-700/30 rounded-lg p-1">
+                                <button
+                                  onClick={() => setMobileViewMode('card')}
+                                  className={`px-3 py-1 rounded text-xs font-medium transition-all ${mobileViewMode === 'card'
+                                    ? 'bg-purple-500 text-white'
+                                    : 'text-gray-300 hover:text-white'
+                                    }`}
+                                >
+                                  Card View
+                                </button>
+                                <button
+                                  onClick={() => setMobileViewMode('list')}
+                                  className={`px-3 py-1 rounded text-xs font-medium transition-all ${mobileViewMode === 'list'
+                                    ? 'bg-purple-500 text-white'
+                                    : 'text-gray-300 hover:text-white'
+                                    }`}
+                                >
+                                  List View
+                                </button>
+                              </div>
+
+                              <button
+                                onClick={() => setShowMobileFilters(!showMobileFilters)}
+                                className="text-gray-400 hover:text-white p-2 rounded-lg hover:bg-white/10 transition-colors"
+                              >
+                                <Settings className="h-4 w-4" />
+                              </button>
+                            </div>
+
+                            {/* Mobile Filters */}
+                            {showMobileFilters && (
+                              <div className="sm:hidden mb-4 bg-slate-700/30 rounded-xl p-3 border border-white/10">
+                                <div className="grid grid-cols-2 gap-3">
+                                  <select
+                                    value={statusFilter}
+                                    onChange={(e) => setStatusFilter(e.target.value)}
+                                    className="px-3 py-2 bg-slate-600/50 border border-white/20 rounded-lg text-white text-sm"
+                                  >
+                                    <option value="all">All Status</option>
+                                    <option value="active">Active</option>
+                                    <option value="completed">Completed</option>
+                                  </select>
+                                  <select
+                                    value={sortBy}
+                                    onChange={(e) => setSortBy(e.target.value)}
+                                    className="px-3 py-2 bg-slate-600/50 border border-white/20 rounded-lg text-white text-sm"
+                                  >
+                                    <option value="name">Sort by Name</option>
+                                    <option value="enrolled">Enrollment Date</option>
+                                    <option value="progress">Progress</option>
+                                  </select>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Students List Container */}
+                            <div className={`${mobileViewMode === 'card'
+                              ? 'space-y-3 sm:space-y-4'
+                              : 'space-y-2 sm:space-y-4'
+                              }`}>
+                              {filteredStudents.map((student) => (
                                 <div
                                   key={student.id}
-                                  className="flex items-center justify-between p-4 bg-slate-700/30 rounded-xl border border-white/10"
+                                  className={`bg-slate-700/30 rounded-xl border border-white/10 hover:border-purple-500/30 transition-all duration-200 ${mobileViewMode === 'card'
+                                    ? 'p-3 sm:p-4'
+                                    : 'p-2 sm:p-4'
+                                    }`}
                                 >
-                                  <div className="flex items-center space-x-4">
-                                    <div className="h-10 w-10 bg-gradient-to-r from-green-400 to-blue-400 rounded-xl flex items-center justify-center">
-                                      <GraduationCap className="h-5 w-5 text-white" />
-                                    </div>
-                                    <div>
-                                      <h4 className="font-medium text-white">
-                                        {student.name}
-                                      </h4>
-                                      <p className="text-sm text-gray-400">
-                                        {student.email}
-                                      </p>
-                                      {student.mobile && (
-                                        <p className="text-sm text-gray-400">
-                                          📱 {student.mobile}
-                                        </p>
-                                      )}
-                                      <div className="flex items-center space-x-4 text-sm text-gray-500 mt-2">
-                                        <span>
-                                          Enrolled: {new Date(student.enrolled_at).toLocaleDateString()}
-                                        </span>
-                                        {student.completed_at && (
-                                          <span className="text-green-400">
-                                            Completed: {new Date(student.completed_at).toLocaleDateString()}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500">
-                                        <span>
-                                          Attendance: {student.present_count || 0}/{student.total_attendance || 0}
-                                        </span>
-                                        {student.project_status && (
-                                          <span
-                                            className={`px-2 py-1 rounded text-xs ${student.project_status === "approved"
-                                              ? "bg-green-500/20 text-green-300"
+                                  {/* Card View (Default Mobile) */}
+                                  {(mobileViewMode === 'card' || window.innerWidth >= 640) && (
+                                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between space-y-3 lg:space-y-0">
+                                      {/* Student Info Section */}
+                                      <div className="flex items-start space-x-3 flex-1 min-w-0">
+                                        <div className="h-10 w-10 sm:h-12 sm:w-12 bg-gradient-to-r from-green-400 to-blue-400 rounded-xl flex items-center justify-center flex-shrink-0">
+                                          <GraduationCap className="h-4 w-4 sm:h-6 sm:w-6 text-white" />
+                                        </div>
+
+                                        <div className="flex-1 min-w-0">
+                                          {/* Name and Status Row */}
+                                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3 mb-2">
+                                            <h4 className="font-medium text-white text-sm sm:text-base truncate">
+                                              {student.name}
+                                            </h4>
+                                            <div className="flex flex-wrap gap-1">
+                                              {student.completed_at && (
+                                                <span className="px-2 py-1 bg-green-500/20 text-green-300 text-xs rounded-full border border-green-500/30 whitespace-nowrap">
+                                                  ✓ Completed
+                                                </span>
+                                              )}
+                                              {student.project_status === 'approved' && (
+                                                <span className="px-2 py-1 bg-blue-500/20 text-blue-300 text-xs rounded-full border border-blue-500/30 whitespace-nowrap">
+                                                  📋 Project ✓
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+
+                                          {/* Contact Info */}
+                                          <div className="space-y-1">
+                                            <p className="text-xs sm:text-sm text-gray-400 break-all">
+                                              📧 {student.email}
+                                            </p>
+                                            {student.mobile && (
+                                              <p className="text-xs sm:text-sm text-gray-400">
+                                                📱 {formatMobileDisplay(student.mobile)}
+                                              </p>
+                                            )}
+                                          </div>
+
+                                          {/* Progress Grid - Mobile Optimized */}
+                                          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                            {/* Enrollment */}
+                                            <div className="bg-slate-600/30 p-2 rounded-lg border border-white/10">
+                                              <div className="text-xs text-gray-400">Enrolled</div>
+                                              <div className="text-xs font-medium text-white">
+                                                {new Date(student.enrolled_at).toLocaleDateString('en-US', {
+                                                  month: 'short',
+                                                  day: 'numeric',
+                                                  year: '2-digit'
+                                                })}
+                                              </div>
+                                            </div>
+
+                                            {/* Attendance */}
+                                            <div className="bg-blue-500/20 p-2 rounded-lg border border-blue-500/30">
+                                              <div className="text-xs text-blue-400">Attendance</div>
+                                              <div className="text-xs font-medium text-blue-300">
+                                                {student.present_count || 0}/{student.total_attendance || 0}
+                                                <span className="text-blue-200 ml-1">
+                                                  ({student.total_attendance > 0 ? Math.round((student.present_count / student.total_attendance) * 100) : 0}%)
+                                                </span>
+                                              </div>
+                                            </div>
+
+                                            {/* Project Status */}
+                                            <div className={`p-2 rounded-lg border ${student.project_status === "approved"
+                                              ? "bg-green-500/20 border-green-500/30"
                                               : student.project_status === "rejected"
-                                                ? "bg-red-500/20 text-red-300"
-                                                : "bg-yellow-500/20 text-yellow-300"
-                                              }`}
-                                          >
-                                            Project: {student.project_status}
-                                          </span>
-                                        )}
+                                                ? "bg-red-500/20 border-red-500/30"
+                                                : student.project_status === "submitted"
+                                                  ? "bg-yellow-500/20 border-yellow-500/30"
+                                                  : "bg-gray-500/20 border-gray-500/30"
+                                              }`}>
+                                              <div className={`text-xs ${student.project_status === "approved" ? "text-green-400" :
+                                                student.project_status === "rejected" ? "text-red-400" :
+                                                  student.project_status === "submitted" ? "text-yellow-400" : "text-gray-400"
+                                                }`}>
+                                                Project
+                                              </div>
+                                              <div className={`text-xs font-medium capitalize ${student.project_status === "approved" ? "text-green-300" :
+                                                student.project_status === "rejected" ? "text-red-300" :
+                                                  student.project_status === "submitted" ? "text-yellow-300" : "text-gray-300"
+                                                }`}>
+                                                {student.project_status || 'Not Started'}
+                                              </div>
+                                            </div>
+
+                                            {/* Overall Progress */}
+                                            <div className="bg-purple-500/20 p-2 rounded-lg border border-purple-500/30">
+                                              <div className="text-xs text-purple-400">Progress</div>
+                                              <div className="text-xs font-medium text-purple-300">
+                                                {student.completed_at ? '100%' :
+                                                  student.project_status === 'approved' ? '90%' :
+                                                    student.project_status === 'submitted' ? '75%' :
+                                                      student.present_count > 0 ? '50%' : '10%'}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Action Button */}
+                                      <div className="lg:ml-4">
+                                        <button
+                                          onClick={() => removeStudent(student.id)}
+                                          disabled={loading}
+                                          className="w-full lg:w-auto bg-red-600 text-white px-3 sm:px-4 py-2 rounded-xl hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center justify-center text-xs sm:text-sm font-medium"
+                                        >
+                                          <UserX className="h-3 sm:h-4 w-3 sm:w-4 mr-1 sm:mr-2" />
+                                          Remove
+                                        </button>
                                       </div>
                                     </div>
-                                  </div>
-                                  <button
-                                    onClick={() => removeStudent(student.id)}
-                                    className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-colors flex items-center"
-                                  >
-                                    <UserX className="h-4 w-4 mr-1" />
-                                    Remove
-                                  </button>
+                                  )}
+
+                                  {/* List View (Mobile Compact) */}
+                                  {mobileViewMode === 'list' && window.innerWidth < 640 && (
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center space-x-3 flex-1 min-w-0">
+                                        <div className="h-8 w-8 bg-gradient-to-r from-green-400 to-blue-400 rounded-lg flex items-center justify-center flex-shrink-0">
+                                          <GraduationCap className="h-4 w-4 text-white" />
+                                        </div>
+
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex items-center justify-between">
+                                            <h4 className="font-medium text-white text-sm truncate">
+                                              {student.name}
+                                            </h4>
+                                            <div className="flex items-center space-x-1 ml-2">
+                                              {student.completed_at && (
+                                                <div className="w-2 h-2 bg-green-400 rounded-full" title="Completed"></div>
+                                              )}
+                                              {student.project_status === 'approved' && (
+                                                <div className="w-2 h-2 bg-blue-400 rounded-full" title="Project Approved"></div>
+                                              )}
+                                              {(student.present_count || 0) > 0 && (
+                                                <div className="w-2 h-2 bg-purple-400 rounded-full" title="Active Participant"></div>
+                                              )}
+                                            </div>
+                                          </div>
+                                          <p className="text-xs text-gray-400 truncate">{student.email}</p>
+                                          <div className="flex items-center space-x-3 text-xs text-gray-500 mt-1">
+                                            <span>{student.present_count || 0}/{student.total_attendance || 0} sessions</span>
+                                            <span>{student.project_status || 'No project'}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <button
+                                        onClick={() => removeStudent(student.id)}
+                                        disabled={loading}
+                                        className="bg-red-600 text-white p-2 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors ml-3"
+                                      >
+                                        <UserX className="h-3 w-3" />
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               ))}
-                              {students.length === 0 && (
+
+                              {/* Empty State */}
+                              {filteredStudents.length === 0 && students.length > 0 && (
                                 <div className="text-center py-8">
-                                  <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                                    <Users className="h-8 w-8 text-gray-400" />
+                                  <div className="h-12 w-12 bg-slate-700/50 rounded-xl flex items-center justify-center mx-auto mb-3">
+                                    <Search className="h-6 w-6 text-gray-400" />
                                   </div>
-                                  <p className="text-gray-400">No students enrolled yet.</p>
+                                  <h3 className="text-lg font-medium text-white mb-2">No students found</h3>
+                                  <p className="text-gray-400 text-sm">
+                                    Try adjusting your search or filter criteria
+                                  </p>
+                                  <button
+                                    onClick={() => {
+                                      setStudentSearchFilter('');
+                                      setStatusFilter('all');
+                                      setSortBy('name');
+                                    }}
+                                    className="mt-3 text-purple-400 hover:text-purple-300 text-sm"
+                                  >
+                                    Clear filters
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Completely Empty State */}
+                              {students.length === 0 && (
+                                <div className="text-center py-8 sm:py-12">
+                                  <div className="h-12 sm:h-16 w-12 sm:w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                    <Users className="h-6 sm:h-8 w-6 sm:w-8 text-gray-400" />
+                                  </div>
+                                  <h3 className="text-lg font-medium text-white mb-2">
+                                    No students enrolled yet
+                                  </h3>
+                                  <p className="text-gray-400 text-sm sm:text-base mb-4 max-w-md mx-auto">
+                                    Start building your class by adding students using their email addresses or mobile numbers.
+                                  </p>
                                 </div>
                               )}
                             </div>
+
+                            {/* Mobile Pagination */}
+                            {filteredStudents.length > 10 && (
+                              <div className="mt-6 flex justify-center">
+                                <div className="bg-slate-800/30 rounded-xl p-2 border border-white/10">
+                                  <div className="flex items-center space-x-2">
+                                    <button
+                                      onClick={() => setCurrentStudentPage(prev => Math.max(prev - 1, 1))}
+                                      disabled={currentStudentPage === 1}
+                                      className="p-2 text-gray-400 hover:text-white disabled:opacity-50 transition-colors"
+                                    >
+                                      <ChevronLeft className="h-4 w-4" />
+                                    </button>
+
+                                    <span className="text-sm text-white px-3">
+                                      Page {currentStudentPage} of {totalStudentPages}
+                                    </span>
+
+                                    <button
+                                      onClick={() => setCurrentStudentPage(prev => Math.min(prev + 1, totalStudentPages))}
+                                      disabled={currentStudentPage === totalStudentPages}
+                                      className="p-2 text-gray-400 hover:text-white disabled:opacity-50 transition-colors"
+                                    >
+                                      <ChevronRight className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
-
                       {/* Project Tab for Students */}
                       {activeTab === "project" && user.role === "student" && (
                         <div className="space-y-6">
@@ -7479,7 +7680,7 @@ const LearningManagementSystem = () => {
                                     </p>
                                     {currentProject.project_file && (
                                       <a
-                                        href={`http://localhost:5002/uploads/${currentProject.project_file}`}
+                                        href={`https://backend.learnanyware.com/uploads/${currentProject.project_file}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="inline-flex items-center text-sm text-purple-400 hover:text-purple-300 mt-2"
@@ -7569,7 +7770,7 @@ const LearningManagementSystem = () => {
                                     </p>
                                     {project.project_file && (
                                       <a
-                                        href={`http://localhost:5002/uploads/${project.project_file}`}
+                                        href={`https://backend.learnanyware.com/uploads/${project.project_file}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="inline-flex items-center text-sm text-purple-400 hover:text-purple-300 mt-2"
@@ -8112,7 +8313,7 @@ const LearningManagementSystem = () => {
                                         </p>
                                         {assignment.assignment_file && (
                                           <a
-                                            href={`http://localhost:5002/uploads/${assignment.assignment_file}`}
+                                            href={`https://backend.learnanyware.com/uploads/${assignment.assignment_file}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="inline-flex items-center text-purple-400 hover:text-purple-300"
@@ -8229,7 +8430,7 @@ const LearningManagementSystem = () => {
                                               <div>
                                                 <span className="text-gray-400">File: </span>
                                                 <a
-                                                  href={`http://localhost:5002/uploads/${assignment.submission.submission_file}`}
+                                                  href={`https://backend.learnanyware.com/uploads/${assignment.submission.submission_file}`}
                                                   target="_blank"
                                                   rel="noopener noreferrer"
                                                   className="text-purple-400 hover:text-purple-300"
@@ -8738,7 +8939,7 @@ const LearningManagementSystem = () => {
                                               {query.attachments.map((attachment) => (
                                                 <a
                                                   key={attachment.id}
-                                                  href={`http://localhost:5002/uploads/${attachment.filename}`}
+                                                  href={`https://backend.learnanyware.com/uploads/${attachment.filename}`}
                                                   target="_blank"
                                                   rel="noopener noreferrer"
                                                   className="flex items-center bg-slate-600/50 px-3 py-2 rounded-lg hover:bg-slate-600/70 transition-colors"
@@ -8976,19 +9177,20 @@ const LearningManagementSystem = () => {
                           </div>
                         </div>
                       )}
+                      {/* Videos Tab - Mobile Responsive */}
                       {activeTab === "videos" && (
-                        <div className="space-y-6">
-                          {/* Video Upload/Add Form for Teachers */}
+                        <div className="space-y-4 sm:space-y-6">
+                          {/* Video Upload/Add Form for Teachers - Mobile Responsive */}
                           {user.role === "teacher" && (
-                            <div className="border-b border-white/10 pb-6">
-                              <div className="flex items-center space-x-4 mb-4">
+                            <div className="border-b border-white/10 pb-4 sm:pb-6">
+                              <div className="flex flex-col sm:flex-row sm:items-center space-y-4 sm:space-y-0 sm:space-x-4 mb-4">
                                 <h3 className="text-lg font-semibold text-white">
                                   Add Video
                                 </h3>
-                                <div className="flex bg-slate-700/30 rounded-xl p-1">
+                                <div className="flex bg-slate-700/30 rounded-xl p-1 w-full sm:w-auto">
                                   <button
                                     onClick={() => setVideoType("file")}
-                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${videoType === "file"
+                                    className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all ${videoType === "file"
                                       ? "bg-purple-500 text-white"
                                       : "text-gray-300 hover:text-white"
                                       }`}
@@ -8997,7 +9199,7 @@ const LearningManagementSystem = () => {
                                   </button>
                                   <button
                                     onClick={() => setVideoType("youtube")}
-                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${videoType === "youtube"
+                                    className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all ${videoType === "youtube"
                                       ? "bg-red-500 text-white"
                                       : "text-gray-300 hover:text-white"
                                       }`}
@@ -9007,10 +9209,10 @@ const LearningManagementSystem = () => {
                                 </div>
                               </div>
 
-                              {/* File Upload Form */}
+                              {/* File Upload Form - Mobile Responsive */}
                               {videoType === "file" && (
                                 <form onSubmit={uploadVideo} className="space-y-4">
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <div>
                                       <label className="block text-sm font-medium text-gray-300 mb-2">
                                         Video Title *
@@ -9025,7 +9227,7 @@ const LearningManagementSystem = () => {
                                             title: e.target.value,
                                           })
                                         }
-                                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                        className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm sm:text-base"
                                         placeholder="Video title"
                                       />
                                     </div>
@@ -9043,7 +9245,7 @@ const LearningManagementSystem = () => {
                                             orderIndex: parseInt(e.target.value) || 0,
                                           })
                                         }
-                                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                        className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm sm:text-base"
                                         placeholder="0"
                                       />
                                     </div>
@@ -9060,7 +9262,7 @@ const LearningManagementSystem = () => {
                                           description: e.target.value,
                                         })
                                       }
-                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                      className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm sm:text-base resize-none"
                                       rows="3"
                                       placeholder="Video description"
                                     />
@@ -9078,14 +9280,14 @@ const LearningManagementSystem = () => {
                                           videoFile: e.target.files[0],
                                         })
                                       }
-                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white"
+                                      className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-white text-sm file:mr-2 sm:file:mr-4 file:py-1 sm:file:py-2 file:px-2 sm:file:px-4 file:rounded-lg file:border-0 file:text-xs sm:file:text-sm file:bg-purple-500 file:text-white hover:file:bg-purple-600 file:cursor-pointer"
                                       accept="video/*"
                                     />
                                   </div>
                                   <button
                                     type="submit"
                                     disabled={loading}
-                                    className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                    className="w-full sm:w-auto bg-gradient-to-r from-purple-500 to-pink-500 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-xl hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 transition-all duration-200 flex items-center justify-center text-sm sm:text-base"
                                   >
                                     <Upload className="h-4 w-4 mr-2" />
                                     {loading ? "Uploading..." : "Upload Video"}
@@ -9093,10 +9295,10 @@ const LearningManagementSystem = () => {
                                 </form>
                               )}
 
-                              {/* YouTube Link Form */}
+                              {/* YouTube Link Form - Mobile Responsive */}
                               {videoType === "youtube" && (
                                 <form onSubmit={addYoutubeVideo} className="space-y-4">
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <div>
                                       <label className="block text-sm font-medium text-gray-300 mb-2">
                                         Video Title *
@@ -9111,7 +9313,7 @@ const LearningManagementSystem = () => {
                                             title: e.target.value,
                                           })
                                         }
-                                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white"
+                                        className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white text-sm sm:text-base"
                                         placeholder="Video title"
                                       />
                                     </div>
@@ -9129,7 +9331,7 @@ const LearningManagementSystem = () => {
                                             orderIndex: parseInt(e.target.value) || 0,
                                           })
                                         }
-                                        className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white"
+                                        className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white text-sm sm:text-base"
                                         placeholder="0"
                                       />
                                     </div>
@@ -9148,7 +9350,7 @@ const LearningManagementSystem = () => {
                                           youtubeUrl: e.target.value,
                                         })
                                       }
-                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white"
+                                      className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white text-sm sm:text-base"
                                       placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
                                     />
                                     <p className="text-xs text-gray-400 mt-1">
@@ -9167,7 +9369,7 @@ const LearningManagementSystem = () => {
                                           description: e.target.value,
                                         })
                                       }
-                                      className="w-full px-4 py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white"
+                                      className="w-full px-3 sm:px-4 py-2 sm:py-3 bg-slate-700/50 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 text-white text-sm sm:text-base resize-none"
                                       rows="3"
                                       placeholder="Video description"
                                     />
@@ -9175,7 +9377,7 @@ const LearningManagementSystem = () => {
                                   <button
                                     type="submit"
                                     disabled={loading}
-                                    className="bg-gradient-to-r from-red-500 to-red-600 text-white px-6 py-3 rounded-xl hover:from-red-600 hover:to-red-700 disabled:opacity-50 transition-all duration-200 flex items-center"
+                                    className="w-full sm:w-auto bg-gradient-to-r from-red-500 to-red-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-xl hover:from-red-600 hover:to-red-700 disabled:opacity-50 transition-all duration-200 flex items-center justify-center text-sm sm:text-base"
                                   >
                                     <ExternalLink className="h-4 w-4 mr-2" />
                                     {loading ? "Adding..." : "Add YouTube Video"}
@@ -9185,50 +9387,50 @@ const LearningManagementSystem = () => {
                             </div>
                           )}
 
-                          {/* Videos List */}
+                          {/* Videos List - Mobile Responsive */}
                           <div>
                             <h3 className="text-lg font-semibold text-white mb-4">
                               Course Videos
                             </h3>
-                            <div className="space-y-4">
+                            <div className="space-y-3 sm:space-y-4">
                               {videos.map((video, index) => (
                                 <div
                                   key={video.id}
-                                  className="bg-slate-700/30 rounded-xl p-4 border border-white/10"
+                                  className="bg-slate-700/30 rounded-xl p-3 sm:p-4 border border-white/10"
                                 >
-                                  <div className="flex justify-between items-start">
-                                    <div className="flex-1">
-                                      <div className="flex items-center gap-3 mb-2">
-                                        <h4 className="font-medium text-white">
+                                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start space-y-3 sm:space-y-0">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                                        <h4 className="font-medium text-white text-sm sm:text-base break-words">
                                           {video.title}
                                         </h4>
-                                        <span className="text-xs text-gray-400 bg-slate-600/50 px-2 py-1 rounded">
+                                        <span className="text-xs text-gray-400 bg-slate-600/50 px-2 py-1 rounded whitespace-nowrap">
                                           #{index + 1}
                                         </span>
-                                        <span className={`text-xs px-2 py-1 rounded border ${video.video_type === 'youtube'
+                                        <span className={`text-xs px-2 py-1 rounded border whitespace-nowrap ${video.video_type === 'youtube'
                                           ? 'bg-red-500/20 text-red-300 border-red-500/30'
                                           : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
                                           }`}>
                                           {video.video_type === 'youtube' ? 'YouTube' : 'File'}
                                         </span>
                                         {user.role === "student" && video.video_type === 'file' && videoProgress[video.id]?.completed && (
-                                          <span className="text-xs text-green-300 bg-green-500/20 px-2 py-1 rounded border border-green-500/30">
+                                          <span className="text-xs text-green-300 bg-green-500/20 px-2 py-1 rounded border border-green-500/30 whitespace-nowrap">
                                             Completed
                                           </span>
                                         )}
                                       </div>
                                       {video.description && (
-                                        <p className="text-sm text-gray-300 mb-2">
+                                        <p className="text-xs sm:text-sm text-gray-300 mb-2 break-words">
                                           {video.description}
                                         </p>
                                       )}
-                                      <div className="text-sm text-gray-400 space-y-1">
+                                      <div className="text-xs sm:text-sm text-gray-400 space-y-1">
                                         <p>Uploaded by: {video.uploaded_by_name}</p>
                                         <p>
                                           Added: {new Date(video.created_at).toLocaleDateString()}
                                         </p>
                                         {video.video_type === 'youtube' && (
-                                          <p className="text-red-400">
+                                          <p className="text-red-400 break-all">
                                             YouTube: {video.youtube_url}
                                           </p>
                                         )}
@@ -9252,20 +9454,20 @@ const LearningManagementSystem = () => {
                                         )}
                                       </div>
                                     </div>
-                                    <div className="flex flex-col space-y-2 ml-4">
+                                    <div className="flex flex-row sm:flex-col space-x-2 sm:space-x-0 sm:space-y-2 sm:ml-4">
                                       <button
                                         onClick={() => setSelectedVideo(video)}
-                                        className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors flex items-center"
+                                        className="flex-1 sm:flex-none bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors flex items-center justify-center text-xs sm:text-sm"
                                       >
-                                        <Eye className="h-4 w-4 mr-1" />
+                                        <Eye className="h-3 sm:h-4 w-3 sm:w-4 mr-1" />
                                         {video.video_type === 'youtube' ? 'Watch' : 'Play'}
                                       </button>
                                       {user.role === "teacher" && (
                                         <button
                                           onClick={() => deleteVideo(video.id)}
-                                          className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-colors flex items-center"
+                                          className="flex-1 sm:flex-none bg-red-600 text-white px-3 sm:px-4 py-2 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center text-xs sm:text-sm"
                                         >
-                                          <Trash2 className="h-4 w-4 mr-1" />
+                                          <Trash2 className="h-3 sm:h-4 w-3 sm:w-4 mr-1" />
                                           Delete
                                         </button>
                                       )}
@@ -9275,10 +9477,10 @@ const LearningManagementSystem = () => {
                               ))}
                               {videos.length === 0 && (
                                 <div className="text-center py-8">
-                                  <div className="h-16 w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                                    <FileText className="h-8 w-8 text-gray-400" />
+                                  <div className="h-12 sm:h-16 w-12 sm:w-16 bg-slate-700/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                    <FileText className="h-6 sm:h-8 w-6 sm:w-8 text-gray-400" />
                                   </div>
-                                  <p className="text-gray-400">
+                                  <p className="text-gray-400 text-sm sm:text-base">
                                     No videos added yet.
                                   </p>
                                 </div>

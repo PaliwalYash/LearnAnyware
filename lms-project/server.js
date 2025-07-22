@@ -12,6 +12,7 @@ const PDFDocument = require("pdfkit");
 const crypto = require("crypto");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require("dotenv").config();
+
 const { sendWelcomeEmail } = require('./emailService');
 const activeVideoSessions = new Map();
 const app = express();
@@ -23,7 +24,7 @@ const io = socketIo(server, {
     credentials: true,
   },
 });
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = process.env.API_BASE;
 
 // Middleware
 app.use(
@@ -63,7 +64,7 @@ const videoStorage = multer.diskStorage({
 const uploadVideo = multer({
   storage: videoStorage,
   limits: {
-    fileSize: 500 * 1024 * 1024, // 500MB limit
+    fileSize: parseInt(process.env.MAX_VIDEO_SIZE?.replace('MB', '')) * 1024 * 1024, // 500MB limit
   },
   fileFilter: (req, file, cb) => {
     console.log('File received:', file.originalname, 'MIME type:', file.mimetype);
@@ -99,10 +100,10 @@ const uploadVideo = multer({
 
 // Database configuration
 const dbConfig = {
-  host: "localhost",
-  user: "root",
-  password: "yashplw@9960",
-  database: "lms_db",
+  host: process.env.DB_HOST ,
+  user: process.env.DB_USER ,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME ,
 };
 
 let db;
@@ -802,7 +803,7 @@ async function createDefaultAdmin() {
   }
 }
 
-const JWT_SECRET = "your-secret-key-change-this-in-production";
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Auth middleware
 const authenticateToken = (req, res, next) => {
