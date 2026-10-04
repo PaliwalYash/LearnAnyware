@@ -399,7 +399,7 @@ async function createTables() {
   try {
     await db.query(`ALTER TABLE blogs ADD COLUMN admin_id INT NULL;
         ALTER TABLE blogs ADD CONSTRAINT fk_blogs_admin_id FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL;`);
-    console.log("-- Add admin_id to blogs table ");
+    console.log("-- Add admin_id to blogs table");
 
   }
   catch {
